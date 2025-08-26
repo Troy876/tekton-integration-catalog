@@ -1,0 +1,143 @@
+name: Mapt Provision Test
+
+on:
+  pull_request:
+    branches:
+      - KFLUXDP-333
+    paths:
+      - tasks/mapt-oci/kind-aws-spot/provision/**
+      - tasks/mapt-oci/kind-aws-spot/deprovision/**
+      - .github/workflows/mapt-provision-test.yaml
+    types:
+      - opened
+      - synchronize
+      - reopened
+  merge_group:
+    types:
+      - checks_requested
+
+env:
+  # Use the smallest/cheapest spot instance possible
+  MAPT_ARCH: arm64
+  MAPT_CPUS: 1
+  MAPT_MEMORY: 2
+  MAPT_SPOT: true
+  MAPT_SPOT_INCREASE_RATE: 10
+  MAPT_TIMEOUT: 15m
+  CLUSTER_ID: pr-${{ github.event.number }}-${{ github.run_id }}
+
+jobs:
+  provision-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup environment
+      run: |
+        echo "CLUSTER_NAME=kind-${CLUSTER_ID}" >> $GITHUB_ENV
+        echo "S3_BUCKET_PATH=s3://${{ secrets.AWS_S3_BUCKET }}/mapt/kind/${CLUSTER_ID}" >> $GITHUB_ENV
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: Create AWS credentials secret
+      run: |
+        # Create a temporary AWS credentials file for the Tekton task
+        mkdir -p /tmp/aws-creds
+        echo "${{ secrets.AWS_ACCESS_KEY_ID }}" > /tmp/aws-creds/access-key
+        echo "${{ secrets.AWS_SECRET_ACCESS_KEY }}" > /tmp/aws-creds/secret-key
+        echo "${{ secrets.AWS_REGION }}" > /tmp/aws-creds/region
+        echo "${{ secrets.AWS_S3_BUCKET }}" > /tmp/aws-creds/bucket
+
+    - name: Install Tekton CLI
+      run: |
+        curl -LO https://github.com/tektoncd/cli/releases/download/v0.32.0/tkn_0.32.0_Linux_x86_64.tar.gz
+        tar xvzf tkn_0.32.0_Linux_x86_64.tar.gz
+        sudo mv tkn /usr/local/bin/
+        rm tkn_0.32.0_Linux_x86_64.tar.gz
+
+    - name: Install kubectl
+      run: |
+        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        sudo mv kubectl /usr/local/bin/
+
+    - name: Test Provision Task
+      id: provision
+      run: |
+        echo "Testing Mapt provision task..."
+
+        mkdir -p /tmp/mapt-test
+
+        docker run --rm \
+          -e AWS_DEFAULT_REGION="${{ secrets.AWS_REGION }}" \
+          -e AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
+          -e AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
+          -v /tmp/mapt-test:/opt/cluster-info \
+          -v /tmp/aws-creds:/opt/aws-credentials \
+          quay.io/redhat-developer/mapt:v0.9.7 \
+          mapt aws kind create \
+            --project-name "${CLUSTER_NAME}" \
+            --backed-url "${S3_BUCKET_PATH}" \
+            --conn-details-output /opt/cluster-info \
+            --arch "${MAPT_ARCH}" \
+            --cpus "${MAPT_CPUS}" \
+            --memory "${MAPT_MEMORY}" \
+            --spot \
+            --spot-increase-rate "${MAPT_SPOT_INCREASE_RATE}" \
+            --timeout "${MAPT_TIMEOUT}" \
+            --tags "purpose:ci-test,pr:${{ github.event.number }},run:${{ github.run_id }}"
+
+        if [ -f /tmp/mapt-test/kubeconfig ]; then
+          echo "cluster_provisioned=true" >> $GITHUB_OUTPUT
+          echo "Cluster provisioned"
+        else
+          echo "cluster_provisioned=false" >> $GITHUB_OUTPUT
+          echo "Failed to provision cluster"
+          exit 1
+        fi
+
+    - name: Verify Cluster Health
+      if: steps.provision.outputs.cluster_provisioned == 'true'
+      run: |
+        echo "Verifying cluster health..."
+        export KUBECONFIG=/tmp/mapt-test/kubeconfig
+
+        echo "Waiting for cluster to be ready..."
+        kubectl wait --for=condition=Ready nodes --all --timeout=300s
+
+        echo "Running health check..."
+        kubectl run health-check --image=busybox:1.35 --restart=Never --command -- sleep 30
+        kubectl wait --for=condition=Ready pod/health-check --timeout=120s
+        kubectl delete pod health-check
+
+        echo "Health check passed"
+
+    - name: Test Deprovision Task
+      if: always()
+      run: |
+        docker run --rm \
+          -e AWS_DEFAULT_REGION="${{ secrets.AWS_REGION }}" \
+          -e AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
+          -e AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
+          quay.io/redhat-developer/mapt:v0.9.7 \
+          mapt aws kind destroy \
+            --project-name "${CLUSTER_NAME}" \
+            --backed-url "${S3_BUCKET_PATH}" \
+            --force-destroy
+
+        echo "Cluster deprovisioned"
+
+    - name: Cleanup
+      if: always()
+      run: |
+        echo "Cleaning up temporary files..."
+        rm -rf /tmp/mapt-test /tmp/aws-creds
+        echo "Cleanup completed"
