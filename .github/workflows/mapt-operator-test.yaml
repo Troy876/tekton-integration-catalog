@@ -1,0 +1,111 @@
+name: Mapt Operator Test
+
+on:
+  pull_request:
+    branches: [ KFLUXDP-333 ]
+    types:
+      - opened
+      - synchronize
+      - reopened
+  merge_group:
+    types: [checks_requested]
+
+env:
+  # Use the smallest/cheapest spot instance possible
+  MAPT_ARCH: arm64
+  MAPT_CPUS: 1
+  MAPT_MEMORY: 2
+  MAPT_SPOT: true
+  MAPT_SPOT_INCREASE_RATE: 10
+  MAPT_TIMEOUT: 15m
+  CLUSTER_ID: pr-${{ github.event.number }}-${{ github.run_id }}
+
+jobs:
+  mapt-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup environment
+      run: |
+        echo "CLUSTER_NAME=kind-${CLUSTER_ID}" >> $GITHUB_ENV
+        echo "S3_BUCKET_PATH=s3://${{ secrets.AWS_S3_BUCKET }}/mapt/kind/${CLUSTER_ID}" >> $GITHUB_ENV
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: Provision Mapt Kind cluster
+      id: provision
+      run: |
+        # Use the same mapt image as the Tekton tasks
+        docker run --rm \
+          -e AWS_DEFAULT_REGION="${{ secrets.AWS_REGION }}" \
+          -e AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
+          -e AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
+          -v /tmp/cluster-info:/opt/cluster-info \
+          quay.io/redhat-developer/mapt:v0.9.7 \
+          mapt aws kind create \
+            --project-name "${CLUSTER_NAME}" \
+            --backed-url "${S3_BUCKET_PATH}" \
+            --conn-details-output /opt/cluster-info \
+            --arch "${MAPT_ARCH}" \
+            --cpus "${MAPT_CPUS}" \
+            --memory "${MAPT_MEMORY}" \
+            --spot \
+            --spot-increase-rate "${MAPT_SPOT_INCREASE_RATE}" \
+            --timeout "${MAPT_TIMEOUT}" \
+            --tags "purpose:ci-test,pr:${{ github.event.number }},run:${{ github.run_id }}"
+        
+        # Check if kubeconfig was created
+        if [ -f /tmp/cluster-info/kubeconfig ]; then
+          echo "cluster_provisioned=true" >> $GITHUB_OUTPUT
+          echo "Cluster provisioned successfully"
+        else
+          echo "cluster_provisioned=false" >> $GITHUB_OUTPUT
+          echo "Failed to provision cluster"
+          exit 1
+        fi
+
+    - name: Install kubectl
+      if: steps.provision.outputs.cluster_provisioned == 'true'
+      run: |
+        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        sudo mv kubectl /usr/local/bin/
+
+    - name: Mapt Health Check
+      if: steps.provision.outputs.cluster_provisioned == 'true'
+      run: |
+        export KUBECONFIG=/tmp/cluster-info/kubeconfig
+        
+        echo "Waiting for cluster to be ready..."
+        kubectl wait --for=condition=Ready nodes --all --timeout=300s
+        
+        echo "Running health check..."
+        kubectl run health-check --image=busybox:1.35 --restart=Never --command -- sleep 30
+        kubectl wait --for=condition=Ready pod/health-check --timeout=120s
+        kubectl delete pod health-check
+        
+        echo "Mapt cluster health check passed"
+
+    - name: Deprovision Mapt cluster
+      if: always()
+      run: |
+        echo "Starting cluster cleanup..."
+        docker run --rm \
+          -e AWS_DEFAULT_REGION="${{ secrets.AWS_REGION }}" \
+          -e AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
+          -e AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
+          quay.io/redhat-developer/mapt:v0.9.7 \
+          mapt aws kind destroy \
+            --project-name "${CLUSTER_NAME}" \
+            --backed-url "${S3_BUCKET_PATH}" \
+            --force-destroy
+        echo "Cluster deprovisioning finished."
