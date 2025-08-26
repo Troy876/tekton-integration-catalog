@@ -2,7 +2,7 @@ name: Mapt Operator Test
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [ KFLUXDP-333 ]
     types:
       - opened
       - synchronize
