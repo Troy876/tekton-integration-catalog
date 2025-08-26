@@ -1,0 +1,167 @@
+name: Mapt Provision Test
+
+on:
+  pull_request:
+    branches:
+      - KFLUXDP-333
+    paths:
+      - 'tasks/mapt-oci/kind-aws-spot/provision/**'
+      - 'tasks/mapt-oci/kind-aws-spot/deprovision/**'
+      - '.github/workflows/mapt-provision-test.yaml'
+    types:
+      - opened
+      - synchronize
+      - reopened
+  merge_group:
+    types:
+      - checks_requested
+
+env:
+  # Use the smallest/cheapest spot instance possible
+  MAPT_ARCH: arm64
+  MAPT_CPUS: 1
+  MAPT_MEMORY: 2
+  MAPT_SPOT: "true"
+  MAPT_SPOT_INCREASE_RATE: 10
+  MAPT_TIMEOUT: 15m
+  CLUSTER_ID: pr-${{ github.event.number }}-${{ github.run_id }}
+  KIND_VERSION: v0.20.0
+
+jobs:
+  provision-deprovision-test:
+    name: Test Mapt Provision & Deprovision
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Setup Kind Cluster
+      uses: helm/kind-action@v1.9.0
+      with:
+        version: ${{ env.KIND_VERSION }}
+        cluster_name: kind-${{ env.CLUSTER_ID }}
+        config: |
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          nodes:
+          - role: control-plane
+            kubeadmConfigPatches:
+            - |
+              kind: InitConfiguration
+              nodeRegistration:
+                kubeletExtraArgs:
+                  node-labels: "ingress-ready=true"
+            extraPortMappings:
+            - containerPort: 80
+              hostPort: 80
+              protocol: TCP
+            - containerPort: 443
+              hostPort: 443
+              protocol: TCP
+
+    - name: Install Tekton Pipelines
+      run: |
+        kubectl apply --filename https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
+        kubectl wait --for=condition=Available deployment --all --namespace tekton-pipelines --timeout=300s
+
+    - name: Apply Mapt Tekton Tasks
+      run: |
+        kubectl apply -f tasks/mapt-oci/kind-aws-spot/provision/0.2/kind-aws-provision.yaml
+        kubectl apply -f tasks/mapt-oci/kind-aws-spot/deprovision/0.1/kind-aws-deprovision.yaml
+
+    - name: Create AWS Credentials Secret
+      run: |
+        kubectl create secret generic aws-credentials \
+          --from-literal=access-key="${{ secrets.AWS_ACCESS_KEY_ID }}" \
+          --from-literal=secret-key="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
+          --from-literal=region="${{ secrets.AWS_REGION }}"
+
+    - name: Run Mapt Provision Task
+      id: provision
+      run: |
+        cat <<EOF | kubectl apply -f -
+        apiVersion: tekton.dev/v1
+        kind: TaskRun
+        metadata:
+          name: test-mapt-provision-${{ env.CLUSTER_ID }}
+        spec:
+          taskRef:
+            name: kind-aws-provision
+          params:
+          - name: secret-aws-credentials
+            value: aws-credentials
+          - name: id
+            value: "${{ env.CLUSTER_ID }}"
+          - name: cluster-access-secret-name
+            value: "cluster-access-${{ env.CLUSTER_ID }}"
+          - name: tags
+            value: "purpose:ci-test,pr:${{ github.event.number }},run:${{ github.run_id }}"
+          - name: arch
+            value: "${{ env.MAPT_ARCH }}"
+          - name: cpus
+            value: "${{ env.MAPT_CPUS }}"
+          - name: memory
+            value: "${{ env.MAPT_MEMORY }}"
+          - name: spot
+            value: "${{ env.MAPT_SPOT }}"
+          - name: spot-increase-rate
+            value: "${{ env.MAPT_SPOT_INCREASE_RATE }}"
+          - name: timeout
+            value: "${{ env.MAPT_TIMEOUT }}"
+        EOF
+
+        if kubectl wait --for=condition=Succeeded=True taskrun/test-mapt-provision-${{ env.CLUSTER_ID }} --timeout=600s; then
+          echo "cluster_provisioned=true" >> $GITHUB_OUTPUT
+          echo "Mapt provision task completed"
+        else
+          echo "cluster_provisioned=false" >> $GITHUB_OUTPUT
+          echo "Mapt provision task failed"
+          kubectl describe taskrun test-mapt-provision-${{ env.CLUSTER_ID }} || true
+          exit 1
+        fi
+
+    - name: Verify Provisioned Cluster
+      if: steps.provision.outputs.cluster_provisioned == 'true'
+      run: |
+        kubectl get secret cluster-access-${{ env.CLUSTER_ID }} --output=jsonpath='{.data.kubeconfig}' | base64 --decode > /tmp/aws-kubeconfig
+        
+        export KUBECONFIG=/tmp/aws-kubeconfig
+        kubectl cluster-info
+        kubectl get nodes
+        echo "Cluster verification successful"
+
+    - name: Run Mapt Deprovision Task
+      if: always()
+      run: |
+        cat <<EOF | kubectl apply -f -
+        apiVersion: tekton.dev/v1
+        kind: TaskRun
+        metadata:
+          name: test-mapt-deprovision-${{ env.CLUSTER_ID }}
+        spec:
+          taskRef:
+            name: kind-aws-deprovision
+          params:
+          - name: secret-aws-credentials
+            value: aws-credentials
+          - name: id
+            value: "${{ env.CLUSTER_ID }}"
+          - name: force-destroy
+            value: "true"
+        EOF
+        
+        if kubectl wait --for=condition=Succeeded=True taskrun/test-mapt-deprovision-${{ env.CLUSTER_ID }} --timeout=600s; then
+          echo "Mapt deprovision task completed"
+        else
+          echo "Mapt deprovision task failed"
+          kubectl describe taskrun test-mapt-deprovision-${{ env.CLUSTER_ID }} || true
+          exit 1
+        fi
+
+    - name: Cleanup Kind Cluster
+      if: always()
+      run: |
+        echo "Deleting local Kind cluster"
+        kind delete cluster --name kind-${{ env.CLUSTER_ID }}
