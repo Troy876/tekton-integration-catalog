@@ -2,7 +2,7 @@ name: Mapt Operator Test
 
 on:
   pull_request:
-    branches: [ KFLUXDP-333 ]
+    branches: [ main ]
     types:
       - opened
       - synchronize
@@ -47,8 +47,6 @@ jobs:
         # Use the same mapt image as the Tekton tasks
         docker run --rm \
           -e AWS_DEFAULT_REGION="${{ secrets.AWS_REGION }}" \
-          -e AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
-          -e AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
           -v /tmp/cluster-info:/opt/cluster-info \
           quay.io/redhat-developer/mapt:v0.9.7 \
           mapt aws kind create \
@@ -101,8 +99,6 @@ jobs:
         echo "Starting cluster cleanup..."
         docker run --rm \
           -e AWS_DEFAULT_REGION="${{ secrets.AWS_REGION }}" \
-          -e AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
-          -e AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
           quay.io/redhat-developer/mapt:v0.9.7 \
           mapt aws kind destroy \
             --project-name "${CLUSTER_NAME}" \
