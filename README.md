@@ -18,6 +18,7 @@ The **Tekton Tasks** directory contains reusable tasks that define individual st
    To add a new task, create a `.yaml` file inside the `tasks/<your-task-name>/0.1/` directory. Ensure it follows the Tekton [Task specification](https://tekton.dev/docs/pipelines/tasks/), is well-documented (add `README.md` file), [well-versioned](#-versioning) and includes example usage.
 
 
+
 ### 🔄 StepActions
 
 The **StepActions** directory houses modular building blocks that allow you to fine-tune task execution within Tekton Pipelines. These reusable components can be used to:
