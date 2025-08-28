@@ -6,7 +6,7 @@ Welcome to the **Tekton Integration Catalog**! This repository contains a collec
 
 With prebuilt Tekton Tasks and StepActions, this catalog provides reusable components that help integrate and validate application components. By leveraging these resources, teams can streamline their testing processes and focus on delivering high-quality software.
 
-## 📁 Structure
+## 📁 Structure   
 
 This repository is organized into several key directories, each serving a specific purpose for Tekton-related resources.
 
