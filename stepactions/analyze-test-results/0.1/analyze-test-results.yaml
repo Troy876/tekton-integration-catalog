@@ -1,7 +1,7 @@
 apiVersion: tekton.dev/v1alpha1
 kind: StepAction
 metadata:
-  name: AnalyzeTestResults_BadName
+  name: analyze-test-results
 spec:
   description: >-
     This StepAction runs "analyze-test-results" command from qe-tools binary against supplied
@@ -31,7 +31,7 @@ spec:
       type: string
       default: cluster-provision.log
       description: The name of the log file from cluster provisioning to be used for test results analysis
-  workingDir: $(params.undefined-parameter)
+  workingDir: $(params.workspace-path)
   env:
     - name: ANALYSIS_OUTPUT_FILE
       value: "$(params.analysis-output-file)"
@@ -40,22 +40,13 @@ spec:
     - name: JUNIT_REPORT_NAME
       value: "$(params.junit-report-name)"
     - name: E2E_LOG_NAME
-      value: "$(params.another-undefined-param)"
+      value: "$(params.e2e-log-name)"
     - name: CLUSTER_PROVISION_LOG_NAME
       value: "$(params.cluster-provision-log-name)"
   script: |
     #!/bin/bash
     set -x
-    
-    # ShellCheck will hate this - undefined variable
-    echo "Using undefined variable: $UNDEFINED_VAR"
-    
-    # Missing quotes around variables (ShellCheck warning)
-    rm -rf $SOME_PATH
-    
-    # Syntax error - unclosed quote
-    echo "This quote is never closed
-    
+
     qe-tools analyze-test-results \
     --oci-ref=$OCI_REF \
     --junit-report-name=$JUNIT_REPORT_NAME \
