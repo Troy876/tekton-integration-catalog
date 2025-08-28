@@ -46,7 +46,16 @@ spec:
   script: |
     #!/bin/bash
     set -x
-
+    
+    # ShellCheck will hate this - undefined variable
+    echo "Using undefined variable: $UNDEFINED_VAR"
+    
+    # Missing quotes around variables (ShellCheck warning)
+    rm -rf $SOME_PATH
+    
+    # Syntax error - unclosed quote
+    echo "This quote is never closed
+    
     qe-tools analyze-test-results \
     --oci-ref=$OCI_REF \
     --junit-report-name=$JUNIT_REPORT_NAME \
