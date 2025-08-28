@@ -1,12 +1,12 @@
 apiVersion: tekton.dev/v1alpha1
 kind: StepAction
 metadata:
-  name: analyze-test-results
+  name: AnalyzeTestResults_BadName
 spec:
   description: >-
     This StepAction runs "analyze-test-results" command from qe-tools binary against supplied
     OCI artifact that contains logs and test results.
-  image: quay.io/konflux-ci/qe-tools:latest
+  image: quay.io/konflux-ci/qe-tools
   params:
     - name: workspace-path
       type: string
@@ -31,7 +31,7 @@ spec:
       type: string
       default: cluster-provision.log
       description: The name of the log file from cluster provisioning to be used for test results analysis
-  workingDir: $(params.workspace-path)
+  workingDir: $(params.undefined-parameter)
   env:
     - name: ANALYSIS_OUTPUT_FILE
       value: "$(params.analysis-output-file)"
