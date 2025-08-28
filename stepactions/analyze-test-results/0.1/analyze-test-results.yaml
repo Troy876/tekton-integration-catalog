@@ -40,7 +40,7 @@ spec:
     - name: JUNIT_REPORT_NAME
       value: "$(params.junit-report-name)"
     - name: E2E_LOG_NAME
-      value: "$(params.e2e-log-name)"
+      value: "$(params.another-undefined-param)"
     - name: CLUSTER_PROVISION_LOG_NAME
       value: "$(params.cluster-provision-log-name)"
   script: |
