@@ -32,7 +32,7 @@ spec:
       default: cluster-provision.log
       description: The name of the log file from cluster provisioning to be used for test results analysis
   workingDir: $(params.undefined-parameter)
-  env: 
+  env:
     - name: ANALYSIS_OUTPUT_FILE
       value: "$(params.analysis-output-file)"
     - name: OCI_REF
