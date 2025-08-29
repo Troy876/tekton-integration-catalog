@@ -17,7 +17,6 @@ on:
       - checks_requested
 
 env:
-  # Use the smallest/cheapest spot instance possible
   MAPT_ARCH: arm64
   MAPT_CPUS: 1
   MAPT_MEMORY: 2
@@ -37,29 +36,34 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
 
+    - name: Create Kind Config File
+      run: |
+        cat <<EOF > kind-config.yaml
+        kind: Cluster
+        apiVersion: kind.x-k8s.io/v1alpha4
+        nodes:
+        - role: control-plane
+          kubeadmConfigPatches:
+          - |
+            kind: InitConfiguration
+            nodeRegistration:
+              kubeletExtraArgs:
+                node-labels: "ingress-ready=true"
+          extraPortMappings:
+          - containerPort: 80
+            hostPort: 80
+            protocol: TCP
+          - containerPort: 443
+            hostPort: 443
+            protocol: TCP
+        EOF
+
     - name: Setup Kind Cluster
       uses: helm/kind-action@v1.9.0
       with:
         version: ${{ env.KIND_VERSION }}
         cluster_name: kind-${{ env.CLUSTER_ID }}
-        config: |
-          kind: Cluster
-          apiVersion: kind.x-k8s.io/v1alpha4
-          nodes:
-          - role: control-plane
-            kubeadmConfigPatches:
-            - |
-              kind: InitConfiguration
-              nodeRegistration:
-                kubeletExtraArgs:
-                  node-labels: "ingress-ready=true"
-            extraPortMappings:
-            - containerPort: 80
-              hostPort: 80
-              protocol: TCP
-            - containerPort: 443
-              hostPort: 443
-              protocol: TCP
+        config: kind-config.yaml
 
     - name: Install Tekton Pipelines
       run: |
