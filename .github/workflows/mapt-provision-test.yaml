@@ -195,4 +195,3 @@ jobs:
       run: |
         echo "Deleting local Kind cluster"
         kind delete cluster --name kind-${{ env.CLUSTER_ID }}
-
