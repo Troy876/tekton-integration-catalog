@@ -138,7 +138,8 @@ jobs:
         kubectl create secret generic aws-credentials \
           --from-literal=access-key="${{ secrets.AWS_ACCESS_KEY_ID }}" \
           --from-literal=secret-key="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
-          --from-literal=region="${{ steps.region_selection.outputs.selected_region }}"
+          --from-literal=region="${{ steps.region_selection.outputs.selected_region }}" \
+          --from-literal=bucket="${{ secrets.AWS_S3_BUCKET }}"
 
     - name: Run Mapt Provision Task
       id: provision
@@ -158,6 +159,12 @@ jobs:
             value: "${{ env.CLUSTER_ID }}"
           - name: cluster-access-secret-name
             value: "cluster-access-${{ env.CLUSTER_ID }}"
+          - name: ownerName
+            value: "test-mapt-provision-${{ env.CLUSTER_ID }}"
+          - name: ownerUid
+            value: "${{ github.run_id }}"
+          - name: oci-ref
+            value: "quay.io/konflux-ci/mapt-test-logs:pr-${{ github.event.number }}-${{ github.run_id }}"
           - name: tags
             value: "purpose:ci-test,pr:${{ github.event.number }},run:${{ github.run_id }}"
           - name: arch
