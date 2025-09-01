@@ -67,19 +67,53 @@ jobs:
         config: kind-config.yaml
 
     - name: Install Tekton Pipelines
+      id: install_tekton
       run: |
         kubectl apply --filename https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
         
+        echo "Waiting for Tekton deployments to be available..."
         kubectl wait --for=condition=Available deployment \
           --all \
           --namespace tekton-pipelines \
           --timeout=300s
 
+        echo "Waiting for Tekton webhook pods to be ready..."
         kubectl wait pod \
           --for=condition=Ready \
           --selector=app.kubernetes.io/component=webhook \
           --namespace=tekton-pipelines \
           --timeout=180s
+
+        echo "Waiting for Tekton controller pods to be ready..."
+        kubectl wait pod \
+          --for=condition=Ready \
+          --selector=app.kubernetes.io/component=controller \
+          --namespace=tekton-pipelines \
+          --timeout=180s
+
+        # Additional wait to ensure webhook is fully operational
+        echo "Waiting additional time for webhook to be fully operational..."
+        sleep 30
+
+        echo "Tekton installation completed successfully"
+
+    - name: Verify Tekton Status
+      run: |
+        echo "=== Checking Tekton Pods ==="
+        kubectl get pods -n tekton-pipelines -o wide
+        
+        echo "=== Checking Tekton Services ==="
+        kubectl get svc -n tekton-pipelines
+        
+        echo "=== Checking Tekton Webhook Status ==="
+        kubectl describe pods -n tekton-pipelines -l app.kubernetes.io/component=webhook || true
+        
+        echo "=== Checking Tekton Controller Status ==="
+        kubectl describe pods -n tekton-pipelines -l app.kubernetes.io/component=controller || true
+        
+        echo "=== Testing Webhook Connectivity ==="
+        # Test if webhook service is reachable
+        kubectl run test-webhook --image=busybox --rm -it --restart=Never -- sh -c "wget -qO- --timeout=5 https://tekton-pipelines-webhook.tekton-pipelines.svc:443/health || echo 'Webhook not reachable'"
 
     - name: Diagnose Tekton Installation Failure
       # This step only runs if the previous "Install Tekton Pipelines" step failed
@@ -102,10 +136,63 @@ jobs:
         # Exit with an error code to fail the workflow
         exit 1
 
+    - name: Check MAPT Task Files
+      run: |
+        echo "Checking if MAPT task files exist..."
+        ls -la tasks/mapt-oci/kind-aws-spot/provision/0.2/
+        ls -la tasks/mapt-oci/kind-aws-spot/deprovision/0.1/
+        
+        if [ ! -f "tasks/mapt-oci/kind-aws-spot/provision/0.2/kind-aws-provision.yaml" ]; then
+          echo "ERROR: Provision task file not found!"
+          exit 1
+        fi
+        
+        if [ ! -f "tasks/mapt-oci/kind-aws-spot/deprovision/0.1/kind-aws-deprovision.yaml" ]; then
+          echo "ERROR: Deprovision task file not found!"
+          exit 1
+        fi
+        
+        echo "All MAPT task files found"
+
     - name: Apply Mapt Tekton Tasks
       run: |
-        kubectl apply -f tasks/mapt-oci/kind-aws-spot/provision/0.2/kind-aws-provision.yaml
-        kubectl apply -f tasks/mapt-oci/kind-aws-spot/deprovision/0.1/kind-aws-deprovision.yaml
+        echo "Applying MAPT provision task..."
+        for i in {1..3}; do
+          echo "Attempt $i of 3 to apply provision task..."
+          if kubectl apply -f tasks/mapt-oci/kind-aws-spot/provision/0.2/kind-aws-provision.yaml; then
+            echo "Successfully applied provision task"
+            break
+          else
+            echo "Failed to apply provision task (attempt $i)"
+            if [ $i -eq 3 ]; then
+              echo "All attempts failed. Checking Tekton status..."
+              kubectl get pods -n tekton-pipelines
+              kubectl describe pods -n tekton-pipelines -l app.kubernetes.io/component=webhook
+              exit 1
+            fi
+            echo "Waiting 10 seconds before retry..."
+            sleep 10
+          fi
+        done
+
+        echo "Applying MAPT deprovision task..."
+        for i in {1..3}; do
+          echo "Attempt $i of 3 to apply deprovision task..."
+          if kubectl apply -f tasks/mapt-oci/kind-aws-spot/deprovision/0.1/kind-aws-deprovision.yaml; then
+            echo "Successfully applied deprovision task"
+            break
+          else
+            echo "Failed to apply deprovision task (attempt $i)"
+            if [ $i -eq 3 ]; then
+              echo "All attempts failed"
+              exit 1
+            fi
+            echo "Waiting 10 seconds before retry..."
+            sleep 10
+          fi
+        done
+
+        echo "All MAPT tasks applied successfully"
 
     - name: Determine Least Expensive Region
       id: region_selection
