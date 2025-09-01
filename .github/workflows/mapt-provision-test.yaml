@@ -107,12 +107,38 @@ jobs:
         kubectl apply -f tasks/mapt-oci/kind-aws-spot/provision/0.2/kind-aws-provision.yaml
         kubectl apply -f tasks/mapt-oci/kind-aws-spot/deprovision/0.1/kind-aws-deprovision.yaml
 
+    - name: Determine Least Expensive Region
+      id: region_selection
+      run: |
+        # Set AWS credentials for region discovery
+        export AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}"
+        export AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+        
+        # List of regions to check (you can modify this list)
+        REGIONS=("us-east-1" "us-west-2" "eu-west-1" "ap-southeast-1")
+        
+        # For now, use us-east-1 as default
+        # TODO: Implement spot price checking across regions
+        # Example future implementation:
+        # SELECTED_REGION="us-east-1"
+        # LOWEST_PRICE=999999
+        # for region in "${REGIONS[@]}"; do
+        #   export AWS_DEFAULT_REGION="$region"
+        #   # Check spot price for your instance type
+        #   # aws ec2 describe-spot-price-history --instance-types t3.medium --start-time=$(date -u +%Y-%m-%dT%H:%M:%S) --product-description="Linux/UNIX"
+        # done
+        
+        SELECTED_REGION="us-east-1"
+        
+        echo "selected_region=$SELECTED_REGION" >> $GITHUB_OUTPUT
+        echo "Using region: $SELECTED_REGION"
+
     - name: Create AWS Credentials Secret
       run: |
         kubectl create secret generic aws-credentials \
           --from-literal=access-key="${{ secrets.AWS_ACCESS_KEY_ID }}" \
           --from-literal=secret-key="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
-          --from-literal=region="${{ secrets.AWS_REGION }}"
+          --from-literal=region="${{ steps.region_selection.outputs.selected_region }}"
 
     - name: Run Mapt Provision Task
       id: provision
