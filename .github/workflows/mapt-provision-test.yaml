@@ -194,6 +194,16 @@ jobs:
 
         echo "All MAPT tasks applied successfully"
 
+    - name: Verify Required Secrets
+      run: |
+        echo "Checking if required secrets exist..."
+        kubectl get secret aws-credentials || echo "ERROR: aws-credentials secret not found"
+        kubectl get secret konflux-test-infra || echo "ERROR: konflux-test-infra secret not found"
+        
+        echo "Checking secret contents (without revealing sensitive data)..."
+        kubectl get secret aws-credentials -o jsonpath='{.data}' | jq 'keys' || echo "Could not check aws-credentials secret"
+        kubectl get secret konflux-test-infra -o jsonpath='{.data}' | jq 'keys' || echo "Could not check konflux-test-infra secret"
+
     - name: Determine Least Expensive Region
       id: region_selection
       run: |
@@ -227,6 +237,13 @@ jobs:
           --from-literal=secret-key="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
           --from-literal=region="${{ steps.region_selection.outputs.selected_region }}" \
           --from-literal=bucket="${{ secrets.AWS_S3_BUCKET }}"
+
+    - name: Create Konflux Test Infrastructure Secret
+      run: |
+        # Create a dummy secret for konflux-test-infra to satisfy the volume mount
+        # This is needed for the OCI artifact storage functionality
+        kubectl create secret generic konflux-test-infra \
+          --from-literal=oci-storage-dockerconfigjson='{"auths":{}}' || true
 
     - name: Run Mapt Provision Task
       id: provision
@@ -268,13 +285,56 @@ jobs:
             value: "${{ env.MAPT_TIMEOUT }}"
         EOF
 
+        # Wait a moment for the pod to be created
+        sleep 10
+        
+        # Monitor pod status in real-time
+        echo "Monitoring TaskRun pod status..."
+        POD_NAME=""
+        for i in {1..30}; do
+          POD_NAME=$(kubectl get taskrun test-mapt-provision-${{ env.CLUSTER_ID }} -o jsonpath='{.status.podName}' 2>/dev/null || echo "")
+          if [ -n "$POD_NAME" ]; then
+            echo "Pod created: $POD_NAME"
+            break
+          fi
+          echo "Waiting for pod to be created... (attempt $i/30)"
+          sleep 5
+        done
+        
+        if [ -n "$POD_NAME" ]; then
+          echo "Pod status:"
+          kubectl get pod "$POD_NAME" -o wide || true
+        fi
+
+        # Monitor the TaskRun with better diagnostics
+        echo "Waiting for TaskRun to complete..."
         if kubectl wait --for=condition=Succeeded=True taskrun/test-mapt-provision-${{ env.CLUSTER_ID }} --timeout=600s; then
           echo "cluster_provisioned=true" >> $GITHUB_OUTPUT
           echo "Mapt provision task completed"
         else
           echo "cluster_provisioned=false" >> $GITHUB_OUTPUT
           echo "Mapt provision task failed"
+          
+          # Get detailed diagnostics
+          echo "=== TaskRun Status ==="
           kubectl describe taskrun test-mapt-provision-${{ env.CLUSTER_ID }} || true
+          
+          echo "=== TaskRun Pod Status ==="
+          POD_NAME=$(kubectl get taskrun test-mapt-provision-${{ env.CLUSTER_ID }} -o jsonpath='{.status.podName}')
+          if [ -n "$POD_NAME" ]; then
+            echo "Pod name: $POD_NAME"
+            kubectl describe pod "$POD_NAME" || true
+            
+            echo "=== Pod Logs ==="
+            kubectl logs "$POD_NAME" --all-containers || true
+            
+            echo "=== Pod Events ==="
+            kubectl get events --field-selector involvedObject.name="$POD_NAME" --sort-by='.lastTimestamp' || true
+          fi
+          
+          echo "=== Recent Events ==="
+          kubectl get events --sort-by='.lastTimestamp' | tail -20 || true
+          
           exit 1
         fi
 
