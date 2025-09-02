@@ -120,13 +120,13 @@ jobs:
           echo "Patching Provision task to set USER environment variable..."
           sed -i 's/set -euo pipefail/set -euo pipefail\n          export USER=tekton/' "${PROVISION_TASK_FILE}"
 
-          # Patch 3: Update the mapt CLI image to the public 'latest' tag
-          echo "Patching Provision task to use the latest mapt image..."
-          sed -i "s|quay.io/redhat-developer/mapt:v0.9.7|quay.io/redhat-developer/mapt:latest|g" "${PROVISION_TASK_FILE}"
+          # Patch 3: Update the mapt CLI image to the correct public repository 'konflux-ci'
+          echo "Patching Provision task to use the correct public mapt image..."
+          sed -i "s|quay.io/redhat-developer/mapt:v0.9.7|quay.io/konflux-ci/mapt:latest|g" "${PROVISION_TASK_FILE}"
           
           # === Patch Deprovision Task for consistency ===
-          echo "Patching Deprovision task to use the latest mapt image..."
-          sed -i "s|quay.io/redhat-developer/mapt:v0.9.7|quay.io/redhat-developer/mapt:latest|g" "${DEPROVISION_TASK_FILE}"
+          echo "Patching Deprovision task to use the correct public mapt image..."
+          sed -i "s|quay.io/redhat-developer/mapt:v0.9.7|quay.io/konflux-ci/mapt:latest|g" "${DEPROVISION_TASK_FILE}"
 
 
           kubectl apply -f "${PROVISION_TASK_FILE}"
