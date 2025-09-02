@@ -25,8 +25,6 @@ env:
   MAPT_SPOT_INCREASE_RATE: 10
   MAPT_TIMEOUT: 15m
   CLUSTER_ID: pr-${{ github.event.number }}-${{ github.run_id }}
-  # This variable is no longer used, the version is set directly in the step below
-  # KIND_VERSION: v0.20.0 
 
 jobs:
   test-provision-deprovision:
@@ -76,10 +74,9 @@ jobs:
           fi
           echo "name=${BUCKET_NAME}" >> $GITHUB_OUTPUT
 
-      - name: 5. Spin up KinD Cluster ✅
+      - name: 5. Spin up KinD Cluster
         uses: helm/kind-action@v1.10.0
         with:
-          # Updated to a version that provides Kubernetes v1.30.x
           version: v0.23.0
       
       - name: 6. Install Tekton
@@ -101,10 +98,16 @@ jobs:
         run: |
           kubectl create secret generic aws-credentials --from-literal=access-key="${{ secrets.AWS_ACCESS_KEY_ID }}" --from-literal=secret-key="${{ secrets.AWS_SECRET_ACCESS_KEY }}" --from-literal=region="${{ steps.cheapest_region.outputs.region }}" --from-literal=bucket="${{ steps.s3_bucket.outputs.name }}"
       
-      - name: 9. Run Tekton Provision & Deprovision Pipeline
+      - name: 9. Run Tekton Provision & Deprovision Pipeline ✅
         env:
           CLUSTER_ID: ${{ env.CLUSTER_ID }}
         run: |
+          echo " H"
+          sleep 10
+          
+          # Wait for the webhook deployment to be fully available
+          kubectl wait --for=condition=Available --timeout=60s deployment/tekton-pipelines-webhook -n tekton-pipelines
+
           kubectl apply -f tasks/mapt-oci/kind-aws-spot/provision/0.1/kind-aws-provision.yaml
           kubectl apply -f tasks/mapt-oci/kind-aws-spot/deprovision/0.1/kind-aws-deprovision.yaml
 
