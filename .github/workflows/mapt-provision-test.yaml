@@ -48,33 +48,17 @@ jobs:
         id: cheapest_region
         run: |
           echo "🔎 Searching for the cheapest AWS region for a t4g.small (arm64) spot instance..."
-          
           REGIONS=$(aws ec2 describe-regions --query "Regions[?OptInStatus=='opt-in-not-required' || OptInStatus=='opted-in'].RegionName" --output text)
-          
           BEST_REGION=""
           MIN_PRICE="999.0"
-          
           for REGION in $REGIONS; do
-            PRICE=$(aws ec2 describe-spot-price-history \
-              --instance-types t4g.small \
-              --product-descriptions "Linux/UNIX (Amazon VPC)" \
-              --start-time $(date -u +%Y-%m-%dT%H:%M:%SZ) \
-              --max-items 1 \
-              --region "$REGION" \
-              --query "SpotPriceHistory[0].SpotPrice" --output text 2>/dev/null)
-              
-            # --- THIS LINE IS NOW FIXED ---
-            # Use awk for robust decimal number comparison
+            PRICE=$(aws ec2 describe-spot-price-history --instance-types t4g.small --product-descriptions "Linux/UNIX (Amazon VPC)" --start-time $(date -u +%Y-%m-%dT%H:%M:%SZ) --max-items 1 --region "$REGION" --query "SpotPriceHistory[0].SpotPrice" --output text 2>/dev/null)
             if [ -n "$PRICE" ] && awk -v price="$PRICE" -v min_price="$MIN_PRICE" 'BEGIN {exit !(price < min_price)}'; then
               MIN_PRICE=$PRICE
               BEST_REGION=$REGION
             fi
           done
-          
-          if [ -z "$BEST_REGION" ]; then
-            BEST_REGION="us-east-1"
-          fi
-          
+          if [ -z "$BEST_REGION" ]; then BEST_REGION="us-east-1"; fi
           echo "✅ Cheapest region found: $BEST_REGION at \$${MIN_PRICE}/hour"
           echo "region=${BEST_REGION}" >> $GITHUB_OUTPUT
 
@@ -84,43 +68,43 @@ jobs:
           BUCKET_NAME="mapt-test-bucket-${{ github.run_id }}-${{ github.run_attempt }}"
           REGION="${{ steps.cheapest_region.outputs.region }}"
           echo "🪣 Creating S3 bucket '$BUCKET_NAME' in region '$REGION'..."
-          
-          # The command to create a bucket is different for us-east-1
           if [ "$REGION" = "us-east-1" ]; then
-            aws s3api create-bucket \
-              --bucket "$BUCKET_NAME" \
-              --region "$REGION"
+            aws s3api create-bucket --bucket "$BUCKET_NAME" --region "$REGION"
           else
-            aws s3api create-bucket \
-              --bucket "$BUCKET_NAME" \
-              --region "$REGION" \
-              --create-bucket-configuration LocationConstraint="$REGION"
+            aws s3api create-bucket --bucket "$BUCKET_NAME" --region "$REGION" --create-bucket-configuration LocationConstraint="$REGION"
           fi
-          
           echo "name=${BUCKET_NAME}" >> $GITHUB_OUTPUT
 
       - name: 5. Spin up KinD Cluster
         uses: helm/kind-action@v1.10.0
         with:
-          # Using the version from your env block
           version: ${{ env.KIND_VERSION }}
       
-      - name: 6. Install Tekton
+      - name: 6. Install Tekton ✅
         run: |
           kubectl apply --filename https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
-          echo "⏳ Waiting for Tekton pods to be ready..."
-          kubectl wait --for=condition=ready pod --all -n tekton-pipelines --timeout=180s
+          echo "⏳ Waiting for Tekton controller and webhook pods to be ready..."
+          # Wait specifically for the controller and webhook with an increased timeout
+          kubectl wait --for=condition=ready pod -l app=tekton-pipelines-controller -n tekton-pipelines --timeout=300s
+          kubectl wait --for=condition=ready pod -l app=tekton-pipelines-webhook -n tekton-pipelines --timeout=300s
 
-      - name: 7. Create Kubernetes Secret for Tekton
+      - name: 7. Show Tekton Pod Status on Failure
+        if: failure()
+        run: |
+          echo "::error::Tekton installation failed. Dumping pod status for debugging..."
+          kubectl get pods -n tekton-pipelines -o wide
+          echo "---"
+          kubectl describe pods -n tekton-pipelines
+      
+      - name: 8. Create Kubernetes Secret for Tekton
         run: |
           kubectl create secret generic aws-credentials --from-literal=access-key="${{ secrets.AWS_ACCESS_KEY_ID }}" --from-literal=secret-key="${{ secrets.AWS_SECRET_ACCESS_KEY }}" --from-literal=region="${{ steps.cheapest_region.outputs.region }}" --from-literal=bucket="${{ steps.s3_bucket.outputs.name }}"
       
-      - name: 8. Run Tekton Provision & Deprovision Pipeline
-        # Using env for the shell
+      - name: 9. Run Tekton Provision & Deprovision Pipeline
         env:
           CLUSTER_ID: ${{ env.CLUSTER_ID }}
         run: |
-          # ❗️ IMPORTANT: Update these file paths to match your repository structure
+          # The original Step 7 is now Step 8, and so on.
           kubectl apply -f tasks/mapt-oci/kind-aws-spot/provision/0.1/kind-aws-provision.yaml
           kubectl apply -f tasks/mapt-oci/kind-aws-spot/deprovision/0.1/kind-aws-deprovision.yaml
 
@@ -145,7 +129,6 @@ jobs:
                     value: \$(context.pipelineRun.name)
                   - name: ownerUid
                     value: \$(context.pipelineRun.uid)
-                  # Using the values from your env block
                   - name: arch
                     value: '${{ env.MAPT_ARCH }}'
                   - name: cpus
@@ -183,7 +166,7 @@ jobs:
                 value: \${CLUSTER_ID}
           EOF
 
-      - name: 9. Monitor PipelineRun for Completion
+      - name: 10. Monitor PipelineRun for Completion
         env:
           CLUSTER_ID: ${{ env.CLUSTER_ID }}
         run: |
@@ -194,7 +177,6 @@ jobs:
           tkn pipelinerun logs "\${PIPELINERUN_NAME}" -f &
           LOGS_PID=\$!
           
-          # Wait up to 20 minutes (15m timeout + 5m buffer)
           for i in {1..120}; do
             STATUS=\$(kubectl get pipelinerun "\${PIPELINERUN_NAME}" -o jsonpath='{.status.conditions[0].status}' 2>/dev/null)
             REASON=\$(kubectl get pipelinerun "\${PIPELINERUN_NAME}" -o jsonpath='{.status.conditions[0].reason}' 2>/dev/null)
@@ -206,7 +188,7 @@ jobs:
           kill \$LOGS_PID
           exit 1
 
-      - name: 10. Cleanup Temporary S3 Bucket
+      - name: 11. Cleanup Temporary S3 Bucket
         if: always()
         run: |
           BUCKET_NAME="${{ steps.s3_bucket.outputs.name }}"
