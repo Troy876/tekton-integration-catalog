@@ -98,7 +98,7 @@ jobs:
         run: |
           kubectl create secret generic aws-credentials --from-literal=access-key="${{ secrets.AWS_ACCESS_KEY_ID }}" --from-literal=secret-key="${{ secrets.AWS_SECRET_ACCESS_KEY }}" --from-literal=region="${{ steps.cheapest_region.outputs.region }}" --from-literal=bucket="${{ steps.s3_bucket.outputs.name }}"
       
-      - name: 9. Run Tekton Provision & Deprovision Pipeline ✅
+      - name: 9. Run Tekton Provision & Deprovision Pipeline
         env:
           CLUSTER_ID: ${{ env.CLUSTER_ID }}
         run: |
@@ -161,14 +161,12 @@ jobs:
           apiVersion: tekton.dev/v1
           kind: PipelineRun
           metadata:
-            # Removed backslash to allow shell variable expansion
             name: test-${LOWERCASE_CLUSTER_ID}
           spec:
             pipelineRef:
               name: test-aws-kind-lifecycle
             params:
               - name: id
-                # Removed backslash to allow shell variable expansion
                 value: ${LOWERCASE_CLUSTER_ID}
           EOF
 
