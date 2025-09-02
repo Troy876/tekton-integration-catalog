@@ -18,7 +18,7 @@ on:
 
 # Central configuration for the workflow
 env:
-  MAPT_ARCH: arm64
+  MAPT_ARCH: x86_64
   MAPT_CPUS: 1
   MAPT_MEMORY: 2
   MAPT_SPOT: "true"
@@ -43,15 +43,15 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      - name: 3. Find Cheapest AWS Spot Region for ARM
+      - name: 3. Find Cheapest AWS Spot Region for x86_64
         id: cheapest_region
         run: |
-          echo "🔎 Searching for the cheapest AWS region for a t4g.small (arm64) spot instance..."
+          echo "🔎 Searching for the cheapest AWS region for a t3.micro (x86_64) spot instance..."
           REGIONS=$(aws ec2 describe-regions --query "Regions[?OptInStatus=='opt-in-not-required' || OptInStatus=='opted-in'].RegionName" --output text)
           BEST_REGION=""
           MIN_PRICE="999.0"
           for REGION in $REGIONS; do
-            PRICE=$(aws ec2 describe-spot-price-history --instance-types t4g.small --product-descriptions "Linux/UNIX (Amazon VPC)" --start-time $(date -u +%Y-%m-%dT%H:%M:%SZ) --max-items 1 --region "$REGION" --query "SpotPriceHistory[0].SpotPrice" --output text 2>/dev/null)
+            PRICE=$(aws ec2 describe-spot-price-history --instance-types t3.micro --product-descriptions "Linux/UNIX (Amazon VPC)" --start-time $(date -u +%Y-%m-%dT%H:%M:%SZ) --max-items 1 --region "$REGION" --query "SpotPriceHistory[0].SpotPrice" --output text 2>/dev/null)
             if [ -n "$PRICE" ] && awk -v price="$PRICE" -v min_price="$MIN_PRICE" 'BEGIN {exit !(price < min_price)}'; then
               MIN_PRICE=$PRICE
               BEST_REGION=$REGION
