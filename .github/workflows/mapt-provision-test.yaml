@@ -84,9 +84,10 @@ jobs:
       - name: 6. Create Image Pull Secret
         if: env.PULL_SECRET_PRESENT == 'true'
         run: |
-          echo "Creating image pull secret..."
+          echo "Creating image pull secret from secret value..."
+          echo '${{ secrets.PULL_SECRET_JSON }}' > /tmp/dockerconfig.json
           kubectl create secret generic pull-secret \
-            --from-literal=.dockerconfigjson='${{ secrets.PULL_SECRET_JSON }}' \
+            --from-file=.dockerconfigjson=/tmp/dockerconfig.json \
             --type=kubernetes.io/dockerconfigjson
 
       - name: 7. Link Pull Secret to Default Service Account
