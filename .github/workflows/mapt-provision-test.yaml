@@ -78,15 +78,29 @@ jobs:
         uses: helm/kind-action@v1.10.0
         with:
           version: v0.23.0
+
+      - name: 6. Create Image Pull Secret
+        if: secrets.PULL_SECRET_JSON
+        run: |
+          echo "Creating image pull secret..."
+          kubectl create secret generic pull-secret \
+            --from-literal=.dockerconfigjson='${{ secrets.PULL_SECRET_JSON }}' \
+            --type=kubernetes.io/dockerconfigjson
+
+      - name: 7. Link Pull Secret to Default Service Account
+        if: secrets.PULL_SECRET_JSON
+        run: |
+          echo "Patching default service account to use the pull secret..."
+          kubectl patch serviceaccount default -p '{"imagePullSecrets": [{"name": "pull-secret"}]}'
       
-      - name: 6. Install Tekton
+      - name: 8. Install Tekton
         run: |
           kubectl apply --filename https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
           echo "⏳ Waiting for Tekton controller and webhook pods to be ready..."
           kubectl wait --for=condition=ready pod -l app=tekton-pipelines-controller -n tekton-pipelines --timeout=300s
           kubectl wait --for=condition=ready pod -l app=tekton-pipelines-webhook -n tekton-pipelines --timeout=300s
 
-      - name: 7. Show Tekton Pod Status on Failure
+      - name: 9. Show Tekton Pod Status on Failure
         if: failure()
         run: |
           echo "::error::Tekton installation failed. Dumping pod status for debugging..."
@@ -94,11 +108,11 @@ jobs:
           echo "---"
           kubectl describe pods -n tekton-pipelines
       
-      - name: 8. Create Kubernetes Secret for Tekton
+      - name: 10. Create Kubernetes Secret for Tekton
         run: |
           kubectl create secret generic aws-credentials --from-literal=access-key="${{ secrets.AWS_ACCESS_KEY_ID }}" --from-literal=secret-key="${{ secrets.AWS_SECRET_ACCESS_KEY }}" --from-literal=region="${{ steps.cheapest_region.outputs.region }}" --from-literal=bucket="${{ steps.s3_bucket.outputs.name }}"
       
-      - name: 9. Run Tekton Provision & Deprovision Pipeline
+      - name: 11. Run Tekton Provision & Deprovision Pipeline
         env:
           CLUSTER_ID: ${{ env.CLUSTER_ID }}
         run: |
@@ -180,7 +194,7 @@ jobs:
                 value: ${LOWERCASE_CLUSTER_ID}
           EOF
 
-      - name: 10. Monitor PipelineRun for Completion
+      - name: 12. Monitor PipelineRun for Completion
         env:
           CLUSTER_ID: ${{ env.CLUSTER_ID }}
         run: |
@@ -232,7 +246,7 @@ jobs:
           kubectl get taskruns -n default -l tekton.dev/pipelineRun=${PIPELINERUN_NAME} -o yaml
           exit 1
 
-      - name: 11. Cleanup Temporary S3 Bucket
+      - name: 13. Cleanup Temporary S3 Bucket
         if: always()
         run: |
           BUCKET_NAME="${{ steps.s3_bucket.outputs.name }}"
