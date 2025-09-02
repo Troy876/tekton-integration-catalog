@@ -173,42 +173,49 @@ jobs:
         env:
           CLUSTER_ID: ${{ env.CLUSTER_ID }}
         run: |
-          set -e # Exit immediately if a command exits with a non-zero status.
-          
+          set -e
           LOWERCASE_CLUSTER_ID=$(echo "$CLUSTER_ID" | tr '[:upper:]' '[:lower:]')
           PIPELINERUN_NAME="test-${LOWERCASE_CLUSTER_ID}"
 
-          echo "Installing Tekton CLI (tkn)..."
-          # Download and run the installer script. We let its output show to diagnose any issues.
-          curl -sL https://raw.githubusercontent.com/tektoncd/cli/main/scripts/installer/stable | bash
-          # The script downloads 'tkn' to the current directory. Move it to a globally accessible location.
-          sudo mv ./tkn /usr/local/bin/
-          echo "Verifying tkn installation..."
-          tkn version
+          echo "Installing jq..."
+          sudo apt-get update > /dev/null
+          sudo apt-get install -y jq > /dev/null
 
-          echo "Streaming logs for PipelineRun '${PIPELINERUN_NAME}'..."
-          # Use the 'timeout' command to wait for a maximum of 20 minutes (1200s).
-          # 'tkn logs -f' will stream logs and exit when the PipelineRun completes.
-          # We add '|| true' so the script doesn't exit if 'timeout' kills the process.
-          timeout 1200s tkn pipelinerun logs "${PIPELINERUN_NAME}" -f || true
+          echo "Waiting for PipelineRun '${PIPELINERUN_NAME}' to complete..."
+          
+          # Poll for 20 minutes max (120 retries * 10 seconds)
+          for i in {1..120}; do
+            # Fetch the 'Succeeded' condition of the PipelineRun, which indicates completion.
+            SUCCEEDED_CONDITION=$(kubectl get pipelinerun "${PIPELINERUN_NAME}" -o jsonpath='{.status.conditions[?(@.type=="Succeeded")]}' 2>/dev/null)
 
-          echo "Checking final status of PipelineRun '${PIPELINERUN_NAME}'..."
-          # Use 'tkn describe' with jsonpath to get the final status.
-          STATUS=$(tkn pipelinerun describe "${PIPELINERUN_NAME}" -o jsonpath='{.status.conditions[0].status}')
-          REASON=$(tkn pipelinerun describe "${PIPELINERUN_NAME}" -o jsonpath='{.status.conditions[0].reason}')
+            if [ -n "$SUCCEEDED_CONDITION" ]; then
+              STATUS=$(echo "$SUCCEEDED_CONDITION" | jq -r '.status')
+              REASON=$(echo "$SUCCEEDED_CONDITION" | jq -r '.reason')
+              MESSAGE=$(echo "$SUCCEEDED_CONDITION" | jq -r '.message')
+              
+              if [ "$STATUS" == "True" ]; then
+                echo "✅ PipelineRun Succeeded."
+                # On success, just show the last few lines of the logs.
+                kubectl logs --tail=100 -l tekton.dev/pipelineRun=${PIPELINERUN_NAME} --all-containers
+                exit 0
+              elif [ "$STATUS" == "False" ]; then
+                echo "::error::PipelineRun Failed. Reason: ${REASON}."
+                echo "::error::Message: ${MESSAGE}"
+                echo "--- Dumping all logs for failed PipelineRun ---"
+                kubectl logs -l tekton.dev/pipelineRun=${PIPELINERUN_NAME} --all-containers --tail=-1
+                exit 1
+              fi
+            fi
+            
+            echo "Still waiting... (Attempt ${i}/120)"
+            sleep 10
+          done
 
-          if [ "$STATUS" == "True" ]; then
-            echo "✅ PipelineRun Succeeded."
-            exit 0
-          elif [ "$STATUS" == "False" ]; then
-            echo "::error::PipelineRun Failed with reason: ${REASON}."
-            exit 1
-          else
-            echo "::error::PipelineRun timed out or ended in an unknown state (Status: ${STATUS})."
-            # It's helpful to dump the full status for debugging timeouts
-            tkn pipelinerun describe "${PIPELINERUN_NAME}"
-            exit 1
-          fi
+          echo "::error::PipelineRun timed out after 20 minutes."
+          echo "--- Dumping logs and status for timed out PipelineRun ---"
+          kubectl logs -l tekton.dev/pipelineRun=${PIPELINERUN_NAME} --all-containers --tail=-1
+          kubectl get pipelinerun "${PIPELINERUN_NAME}" -o yaml
+          exit 1
 
       - name: 11. Cleanup Temporary S3 Bucket
         if: always()
