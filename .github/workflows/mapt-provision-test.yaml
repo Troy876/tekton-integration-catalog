@@ -25,7 +25,8 @@ env:
   MAPT_SPOT_INCREASE_RATE: 10
   MAPT_TIMEOUT: 15m
   CLUSTER_ID: pr-${{ github.event.number }}-${{ github.run_id }}
-  KIND_VERSION: v0.20.0
+  # This variable is no longer used, the version is set directly in the step below
+  # KIND_VERSION: v0.20.0 
 
 jobs:
   test-provision-deprovision:
@@ -75,16 +76,16 @@ jobs:
           fi
           echo "name=${BUCKET_NAME}" >> $GITHUB_OUTPUT
 
-      - name: 5. Spin up KinD Cluster
+      - name: 5. Spin up KinD Cluster ✅
         uses: helm/kind-action@v1.10.0
         with:
-          version: ${{ env.KIND_VERSION }}
+          # Updated to a version that provides Kubernetes v1.30.x
+          version: v0.23.0
       
-      - name: 6. Install Tekton ✅
+      - name: 6. Install Tekton
         run: |
           kubectl apply --filename https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
           echo "⏳ Waiting for Tekton controller and webhook pods to be ready..."
-          # Wait specifically for the controller and webhook with an increased timeout
           kubectl wait --for=condition=ready pod -l app=tekton-pipelines-controller -n tekton-pipelines --timeout=300s
           kubectl wait --for=condition=ready pod -l app=tekton-pipelines-webhook -n tekton-pipelines --timeout=300s
 
@@ -104,7 +105,6 @@ jobs:
         env:
           CLUSTER_ID: ${{ env.CLUSTER_ID }}
         run: |
-          # The original Step 7 is now Step 8, and so on.
           kubectl apply -f tasks/mapt-oci/kind-aws-spot/provision/0.1/kind-aws-provision.yaml
           kubectl apply -f tasks/mapt-oci/kind-aws-spot/deprovision/0.1/kind-aws-deprovision.yaml
 
