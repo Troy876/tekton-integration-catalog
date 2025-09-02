@@ -85,8 +85,17 @@ jobs:
       - name: 6. Create Image Pull Secret from YAML
         if: env.PULL_SECRET_PRESENT == 'true'
         run: |
-          echo "Applying pull secret from YAML manifest..."
+          echo "Installing yq for YAML processing..."
+          sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/local/bin/yq
+          sudo chmod +x /usr/local/bin/yq
+
+          echo "Writing pull secret to temporary file..."
           echo '${{ secrets.PULL_SECRET }}' > /tmp/pull-secret.yaml
+
+          echo "Cleaning invalid metadata from pull secret YAML..."
+          yq -i 'del(.metadata.resourceVersion) | del(.metadata.uid) | del(.metadata.creationTimestamp) | del(.metadata.selfLink)' /tmp/pull-secret.yaml
+          
+          echo "Applying cleaned pull secret manifest..."
           kubectl apply -f /tmp/pull-secret.yaml
 
       - name: 7. Link Pull Secret to Default Service Account
@@ -212,7 +221,7 @@ jobs:
           echo "Waiting for PipelineRun '${PIPELINERUN_NAME}' to complete..."
           
           for i in {1..120}; do
-            SUCCEEDED_CONDITION=$(kubectl get pipelinrun "${PIPELINERUN_NAME}" -n default -o jsonpath='{.status.conditions[?(@.type=="Succeeded")]}' 2>/dev/null)
+            SUCCEEDED_CONDITION=$(kubectl get pipelinerun "${PIPELINERUN_NAME}" -n default -o jsonpath='{.status.conditions[?(@.type=="Succeeded")]}' 2>/dev/null)
 
             if [ -n "$SUCCEEDED_CONDITION" ]; then
               STATUS=$(echo "$SUCCEEDED_CONDITION" | jq -r '.status')
