@@ -16,6 +16,7 @@ on:
     types:
       - checks_requested
 
+# Central configuration for the workflow
 env:
   MAPT_ARCH: arm64
   MAPT_CPUS: 1
@@ -27,357 +28,162 @@ env:
   KIND_VERSION: v0.20.0
 
 jobs:
-  provision-deprovision-test:
-    name: Test Mapt Provision & Deprovision
+  test-provision-deprovision:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-
+    permissions:
+      id-token: write
+      contents: read
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+      - name: 1. Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Create Kind Config File
-      run: |
-        cat <<EOF > kind-config.yaml
-        kind: Cluster
-        apiVersion: kind.x-k8s.io/v1alpha4
-        nodes:
-        - role: control-plane
-          image: kindest/node:v1.28.7
-          kubeadmConfigPatches:
-          - |
-            kind: InitConfiguration
-            nodeRegistration:
-              kubeletExtraArgs:
-                node-labels: "ingress-ready=true"
-          extraPortMappings:
-          - containerPort: 80
-            hostPort: 80
-            protocol: TCP
-          - containerPort: 443
-            hostPort: 443
-            protocol: TCP
-        EOF
+      - name: 2. Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
 
-    - name: Setup Kind Cluster
-      uses: helm/kind-action@v1.9.0
-      with:
-        version: ${{ env.KIND_VERSION }}
-        cluster_name: kind-${{ env.CLUSTER_ID }}
-        config: kind-config.yaml
-
-    - name: Install Tekton Pipelines
-      id: install_tekton
-      run: |
-        kubectl apply --filename https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
-        
-        echo "Waiting for Tekton deployments to be available..."
-        kubectl wait --for=condition=Available deployment \
-          --all \
-          --namespace tekton-pipelines \
-          --timeout=300s
-
-        echo "Waiting for Tekton webhook pods to be ready..."
-        kubectl wait pod \
-          --for=condition=Ready \
-          --selector=app.kubernetes.io/component=webhook \
-          --namespace=tekton-pipelines \
-          --timeout=180s
-
-        echo "Waiting for Tekton controller pods to be ready..."
-        kubectl wait pod \
-          --for=condition=Ready \
-          --selector=app.kubernetes.io/component=controller \
-          --namespace=tekton-pipelines \
-          --timeout=180s
-
-        # Additional wait to ensure webhook is fully operational
-        echo "Waiting additional time for webhook to be fully operational..."
-        sleep 30
-
-        echo "Tekton installation completed successfully"
-
-    - name: Verify Tekton Status
-      run: |
-        echo "=== Checking Tekton Pods ==="
-        kubectl get pods -n tekton-pipelines -o wide
-        
-        echo "=== Checking Tekton Services ==="
-        kubectl get svc -n tekton-pipelines
-        
-        echo "=== Checking Tekton Webhook Status ==="
-        kubectl describe pods -n tekton-pipelines -l app.kubernetes.io/component=webhook || true
-        
-        echo "=== Checking Tekton Controller Status ==="
-        kubectl describe pods -n tekton-pipelines -l app.kubernetes.io/component=controller || true
-        
-        echo "=== Testing Webhook Connectivity ==="
-        # Test if webhook service is reachable
-        kubectl run test-webhook --image=busybox --rm -it --restart=Never -- sh -c "wget -qO- --timeout=5 https://tekton-pipelines-webhook.tekton-pipelines.svc:443/health || echo 'Webhook not reachable'"
-
-    - name: Diagnose Tekton Installation Failure
-      # This step only runs if the previous "Install Tekton Pipelines" step failed
-      if: steps.install_tekton.outcome == 'failure'
-      run: |
-        echo "❌ Tekton installation failed. Diagnosing cluster state..."
-        echo "---"
-        echo "🔎 Checking node status and resources:"
-        kubectl describe nodes
-        echo "---"
-        echo "🔎 Checking pod status in 'tekton-pipelines' namespace:"
-        kubectl get pods --namespace tekton-pipelines -o wide
-        echo "---"
-        echo "📋 Describing pods to find errors (look for 'Events'):"
-        # Loop through all pods in the namespace and describe them
-        for pod in $(kubectl get pods -n tekton-pipelines -o jsonpath='{.items[*].metadata.name}'); do
-          echo "--- Describing pod: $pod ---"
-          kubectl describe pod "$pod" --namespace tekton-pipelines
-        done
-        # Exit with an error code to fail the workflow
-        exit 1
-
-    - name: Check MAPT Task Files
-      run: |
-        echo "Checking if MAPT task files exist..."
-        ls -la tasks/mapt-oci/kind-aws-spot/provision/0.2/
-        ls -la tasks/mapt-oci/kind-aws-spot/deprovision/0.1/
-        
-        if [ ! -f "tasks/mapt-oci/kind-aws-spot/provision/0.2/kind-aws-provision.yaml" ]; then
-          echo "ERROR: Provision task file not found!"
-          exit 1
-        fi
-        
-        if [ ! -f "tasks/mapt-oci/kind-aws-spot/deprovision/0.1/kind-aws-deprovision.yaml" ]; then
-          echo "ERROR: Deprovision task file not found!"
-          exit 1
-        fi
-        
-        echo "All MAPT task files found"
-
-    - name: Apply Mapt Tekton Tasks
-      run: |
-        echo "Applying MAPT provision task..."
-        for i in {1..3}; do
-          echo "Attempt $i of 3 to apply provision task..."
-          if kubectl apply -f tasks/mapt-oci/kind-aws-spot/provision/0.2/kind-aws-provision.yaml; then
-            echo "Successfully applied provision task"
-            break
-          else
-            echo "Failed to apply provision task (attempt $i)"
-            if [ $i -eq 3 ]; then
-              echo "All attempts failed. Checking Tekton status..."
-              kubectl get pods -n tekton-pipelines
-              kubectl describe pods -n tekton-pipelines -l app.kubernetes.io/component=webhook
-              exit 1
+      - name: 3. Find Cheapest AWS Spot Region for ARM
+        id: cheapest_region
+        run: |
+          echo "🔎 Searching for the cheapest AWS region for a t4g.small (arm64) spot instance..."
+          REGIONS=$(aws ec2 describe-regions --query "Regions[?OptInStatus=='opt-in-not-required' || OptInStatus=='opted-in'].RegionName" --output text)
+          BEST_REGION=""
+          MIN_PRICE="999.0"
+          for REGION in $REGIONS; do
+            PRICE=$(aws ec2 describe-spot-price-history --instance-types t4g.small --product-descriptions "Linux/UNIX (Amazon VPC)" --start-time $(date -u +%Y-%m-%dT%H:%M:%SZ) --max-items 1 --region "$REGION" --query "SpotPriceHistory[0].SpotPrice" --output text 2>/dev/null)
+            if [ "$PRICE" != "None" ] && [ $(echo "$PRICE < $MIN_PRICE" | bc) -eq 1 ]; then
+              MIN_PRICE=$PRICE
+              BEST_REGION=$REGION
             fi
-            echo "Waiting 10 seconds before retry..."
+          done
+          if [ -z "$BEST_REGION" ]; then BEST_REGION="us-east-1"; fi
+          echo "✅ Cheapest region found: $BEST_REGION at \$${MIN_PRICE}/hour"
+          echo "region=${BEST_REGION}" >> $GITHUB_OUTPUT
+
+      - name: 4. Create Temporary S3 Bucket
+        id: s3_bucket
+        run: |
+          BUCKET_NAME="mapt-test-bucket-${{ github.run_id }}-${{ github.run_attempt }}"
+          REGION="${{ steps.cheapest_region.outputs.region }}"
+          echo "🪣 Creating S3 bucket '$BUCKET_NAME' in region '$REGION'..."
+          aws s3api create-bucket --bucket "$BUCKET_NAME" --region "$REGION"
+          echo "name=${BUCKET_NAME}" >> $GITHUB_OUTPUT
+
+      - name: 5. Spin up KinD Cluster
+        uses: helm/kind-action@v1.10.0
+        with:
+          # Using the version from your env block
+          version: ${{ env.KIND_VERSION }}
+      
+      - name: 6. Install Tekton
+        run: |
+          kubectl apply --filename https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
+          echo "⏳ Waiting for Tekton pods to be ready..."
+          kubectl wait --for=condition=ready pod --all -n tekton-pipelines --timeout=180s
+
+      - name: 7. Create Kubernetes Secret for Tekton
+        run: |
+          kubectl create secret generic aws-credentials --from-literal=access-key="${{ secrets.AWS_ACCESS_KEY_ID }}" --from-literal=secret-key="${{ secrets.AWS_SECRET_ACCESS_KEY }}" --from-literal=region="${{ steps.cheapest_region.outputs.region }}" --from-literal=bucket="${{ steps.s3_bucket.outputs.name }}"
+      
+      - name: 8. Run Tekton Provision & Deprovision Pipeline
+        # Using env for the shell
+        env:
+          CLUSTER_ID: ${{ env.CLUSTER_ID }}
+        run: |
+          # ❗️ IMPORTANT: Update these file paths to match your repository structure
+          kubectl apply -f tasks/mapt-oci/kind-aws-spot/provision/0.1/kind-aws-provision.yaml
+          kubectl apply -f tasks/mapt-oci/kind-aws-spot/deprovision/0.1/kind-aws-deprovision.yaml
+
+          cat <<EOF | kubectl apply -f -
+          apiVersion: tekton.dev/v1
+          kind: Pipeline
+          metadata:
+            name: test-aws-kind-lifecycle
+          spec:
+            params:
+              - name: id
+            tasks:
+              - name: mapt-provision
+                taskRef:
+                  name: kind-aws-provision
+                params:
+                  - name: id
+                    value: \$(params.id)
+                  - name: secret-aws-credentials
+                    value: "aws-credentials"
+                  - name: ownerName
+                    value: \$(context.pipelineRun.name)
+                  - name: ownerUid
+                    value: \$(context.pipelineRun.uid)
+                  # Using the values from your env block
+                  - name: arch
+                    value: '${{ env.MAPT_ARCH }}'
+                  - name: cpus
+                    value: '${{ env.MAPT_CPUS }}'
+                  - name: memory
+                    value: '${{ env.MAPT_MEMORY }}'
+                  - name: spot
+                    value: '${{ env.MAPT_SPOT }}'
+                  - name: spot-increase-rate
+                    value: '${{ env.MAPT_SPOT_INCREASE_RATE }}'
+                  - name: timeout
+                    value: '${{ env.MAPT_TIMEOUT }}'
+
+              - name: mapt-deprovision
+                runAfter: ["mapt-provision"]
+                taskRef:
+                  name: kind-aws-deprovision
+                params:
+                  - name: id
+                    value: \$(params.id)
+                  - name: secret-aws-credentials
+                    value: "aws-credentials"
+                  - name: cluster-access-secret
+                    value: \$(tasks.mapt-provision.results.cluster-access-secret)
+          ---
+          apiVersion: tekton.dev/v1
+          kind: PipelineRun
+          metadata:
+            name: test-\${CLUSTER_ID}
+          spec:
+            pipelineRef:
+              name: test-aws-kind-lifecycle
+            params:
+              - name: id
+                value: \${CLUSTER_ID}
+          EOF
+
+      - name: 9. Monitor PipelineRun for Completion
+        env:
+          CLUSTER_ID: ${{ env.CLUSTER_ID }}
+        run: |
+          PIPELINERUN_NAME="test-${CLUSTER_ID}"
+          # Install tkn CLI for easier log parsing
+          curl -sL https://raw.githubusercontent.com/tektoncd/cli/main/scripts/installer/stable | bash >/dev/null 2>&1 && mv ./tkn /usr/local/bin/
+          
+          tkn pipelinerun logs "\${PIPELINERUN_NAME}" -f &
+          LOGS_PID=\$!
+          
+          # Wait up to 20 minutes (15m timeout + 5m buffer)
+          for i in {1..120}; do
+            STATUS=\$(kubectl get pipelinerun "\${PIPELINERUN_NAME}" -o jsonpath='{.status.conditions[0].status}' 2>/dev/null)
+            REASON=\$(kubectl get pipelinerun "\${PIPELINERUN_NAME}" -o jsonpath='{.status.conditions[0].reason}' 2>/dev/null)
+            if [ "\$STATUS" == "True" ]; then echo "✅ PipelineRun Succeeded."; kill \$LOGS_PID; exit 0; fi
+            if [ "\$STATUS" == "False" ]; then echo "::error::PipelineRun Failed with reason: \$REASON."; kill \$LOGS_PID; exit 1; fi
             sleep 10
-          fi
-        done
-
-        echo "Applying MAPT deprovision task..."
-        for i in {1..3}; do
-          echo "Attempt $i of 3 to apply deprovision task..."
-          if kubectl apply -f tasks/mapt-oci/kind-aws-spot/deprovision/0.1/kind-aws-deprovision.yaml; then
-            echo "Successfully applied deprovision task"
-            break
-          else
-            echo "Failed to apply deprovision task (attempt $i)"
-            if [ $i -eq 3 ]; then
-              echo "All attempts failed"
-              exit 1
-            fi
-            echo "Waiting 10 seconds before retry..."
-            sleep 10
-          fi
-        done
-
-        echo "All MAPT tasks applied successfully"
-
-    - name: Verify Required Secrets
-      run: |
-        echo "Checking if required secrets exist..."
-        kubectl get secret aws-credentials || echo "ERROR: aws-credentials secret not found"
-        kubectl get secret konflux-test-infra || echo "ERROR: konflux-test-infra secret not found"
-        
-        echo "Checking secret contents (without revealing sensitive data)..."
-        kubectl get secret aws-credentials -o jsonpath='{.data}' | jq 'keys' || echo "Could not check aws-credentials secret"
-        kubectl get secret konflux-test-infra -o jsonpath='{.data}' | jq 'keys' || echo "Could not check konflux-test-infra secret"
-
-    - name: Determine Least Expensive Region
-      id: region_selection
-      run: |
-        # Set AWS credentials for region discovery
-        export AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}"
-        export AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}"
-        
-        # List of regions to check (you can modify this list)
-        REGIONS=("us-east-1" "us-west-2" "eu-west-1" "ap-southeast-1")
-        
-        # For now, use us-east-1 as default
-        # TODO: Implement spot price checking across regions
-        # Example future implementation:
-        # SELECTED_REGION="us-east-1"
-        # LOWEST_PRICE=999999
-        # for region in "${REGIONS[@]}"; do
-        #   export AWS_DEFAULT_REGION="$region"
-        #   # Check spot price for your instance type
-        #   # aws ec2 describe-spot-price-history --instance-types t3.medium --start-time=$(date -u +%Y-%m-%dT%H:%M:%S) --product-description="Linux/UNIX"
-        # done
-        
-        SELECTED_REGION="us-east-1"
-        
-        echo "selected_region=$SELECTED_REGION" >> $GITHUB_OUTPUT
-        echo "Using region: $SELECTED_REGION"
-
-    - name: Create AWS Credentials Secret
-      run: |
-        kubectl create secret generic aws-credentials \
-          --from-literal=access-key="${{ secrets.AWS_ACCESS_KEY_ID }}" \
-          --from-literal=secret-key="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
-          --from-literal=region="${{ steps.region_selection.outputs.selected_region }}" \
-          --from-literal=bucket="${{ secrets.AWS_S3_BUCKET }}"
-
-    - name: Create Konflux Test Infrastructure Secret
-      run: |
-        # Create a dummy secret for konflux-test-infra to satisfy the volume mount
-        # This is needed for the OCI artifact storage functionality
-        kubectl create secret generic konflux-test-infra \
-          --from-literal=oci-storage-dockerconfigjson='{"auths":{}}' || true
-
-    - name: Run Mapt Provision Task
-      id: provision
-      run: |
-        cat <<EOF | kubectl apply -f -
-        apiVersion: tekton.dev/v1
-        kind: TaskRun
-        metadata:
-          name: test-mapt-provision-${{ env.CLUSTER_ID }}
-        spec:
-          taskRef:
-            name: kind-aws-provision
-          params:
-          - name: secret-aws-credentials
-            value: aws-credentials
-          - name: id
-            value: "${{ env.CLUSTER_ID }}"
-          - name: cluster-access-secret-name
-            value: "cluster-access-${{ env.CLUSTER_ID }}"
-          - name: ownerName
-            value: "test-mapt-provision-${{ env.CLUSTER_ID }}"
-          - name: ownerUid
-            value: "${{ github.run_id }}"
-          - name: oci-ref
-            value: "quay.io/konflux-ci/mapt-test-logs:pr-${{ github.event.number }}-${{ github.run_id }}"
-          - name: tags
-            value: "purpose:ci-test,pr:${{ github.event.number }},run:${{ github.run_id }}"
-          - name: arch
-            value: "${{ env.MAPT_ARCH }}"
-          - name: cpus
-            value: "${{ env.MAPT_CPUS }}"
-          - name: memory
-            value: "${{ env.MAPT_MEMORY }}"
-          - name: spot
-            value: "${{ env.MAPT_SPOT }}"
-          - name: spot-increase-rate
-            value: "${{ env.MAPT_SPOT_INCREASE_RATE }}"
-          - name: timeout
-            value: "${{ env.MAPT_TIMEOUT }}"
-        EOF
-
-        # Wait a moment for the pod to be created
-        sleep 10
-        
-        # Monitor pod status in real-time
-        echo "Monitoring TaskRun pod status..."
-        POD_NAME=""
-        for i in {1..30}; do
-          POD_NAME=$(kubectl get taskrun test-mapt-provision-${{ env.CLUSTER_ID }} -o jsonpath='{.status.podName}' 2>/dev/null || echo "")
-          if [ -n "$POD_NAME" ]; then
-            echo "Pod created: $POD_NAME"
-            break
-          fi
-          echo "Waiting for pod to be created... (attempt $i/30)"
-          sleep 5
-        done
-        
-        if [ -n "$POD_NAME" ]; then
-          echo "Pod status:"
-          kubectl get pod "$POD_NAME" -o wide || true
-        fi
-
-        # Monitor the TaskRun with better diagnostics
-        echo "Waiting for TaskRun to complete..."
-        if kubectl wait --for=condition=Succeeded=True taskrun/test-mapt-provision-${{ env.CLUSTER_ID }} --timeout=600s; then
-          echo "cluster_provisioned=true" >> $GITHUB_OUTPUT
-          echo "Mapt provision task completed"
-        else
-          echo "cluster_provisioned=false" >> $GITHUB_OUTPUT
-          echo "Mapt provision task failed"
-          
-          # Get detailed diagnostics
-          echo "=== TaskRun Status ==="
-          kubectl describe taskrun test-mapt-provision-${{ env.CLUSTER_ID }} || true
-          
-          echo "=== TaskRun Pod Status ==="
-          POD_NAME=$(kubectl get taskrun test-mapt-provision-${{ env.CLUSTER_ID }} -o jsonpath='{.status.podName}')
-          if [ -n "$POD_NAME" ]; then
-            echo "Pod name: $POD_NAME"
-            kubectl describe pod "$POD_NAME" || true
-            
-            echo "=== Pod Logs ==="
-            kubectl logs "$POD_NAME" --all-containers || true
-            
-            echo "=== Pod Events ==="
-            kubectl get events --field-selector involvedObject.name="$POD_NAME" --sort-by='.lastTimestamp' || true
-          fi
-          
-          echo "=== Recent Events ==="
-          kubectl get events --sort-by='.lastTimestamp' | tail -20 || true
-          
+          done
+          echo "::error::PipelineRun timed out after 20 minutes."
+          kill \$LOGS_PID
           exit 1
-        fi
 
-    - name: Verify Provisioned Cluster
-      if: steps.provision.outputs.cluster_provisioned == 'true'
-      run: |
-        kubectl get secret cluster-access-${{ env.CLUSTER_ID }} --output=jsonpath='{.data.kubeconfig}' | base64 --decode > /tmp/aws-kubeconfig
-        
-        export KUBECONFIG=/tmp/aws-kubeconfig
-        kubectl cluster-info
-        kubectl get nodes
-        echo "Cluster verification successful"
-
-    - name: Run Mapt Deprovision Task
-      if: always()
-      run: |
-        cat <<EOF | kubectl apply -f -
-        apiVersion: tekton.dev/v1
-        kind: TaskRun
-        metadata:
-          name: test-mapt-deprovision-${{ env.CLUSTER_ID }}
-        spec:
-          taskRef:
-            name: kind-aws-deprovision
-          params:
-          - name: secret-aws-credentials
-            value: aws-credentials
-          - name: id
-            value: "${{ env.CLUSTER_ID }}"
-          - name: force-destroy
-            value: "true"
-        EOF
-        
-        if kubectl wait --for=condition=Succeeded=True taskrun/test-mapt-deprovision-${{ env.CLUSTER_ID }} --timeout=600s; then
-          echo "Mapt deprovision task completed"
-        else
-          echo "Mapt deprovision task failed"
-          kubectl describe taskrun test-mapt-deprovision-${{ env.CLUSTER_ID }} || true
-          exit 1
-        fi
-
-    - name: Cleanup Kind Cluster
-      if: always()
-      run: |
-        echo "Deleting local Kind cluster"
-        kind delete cluster --name kind-${{ env.CLUSTER_ID }}
+      - name: 10. Cleanup Temporary S3 Bucket
+        if: always()
+        run: |
+          BUCKET_NAME="${{ steps.s3_bucket.outputs.name }}"
+          if [ -n "$BUCKET_NAME" ]; then
+            echo "🧹 Cleaning up S3 bucket '$BUCKET_NAME'..."
+            aws s3 rb "s3://${BUCKET_NAME}" --force
+            echo "✅ Cleanup complete."
+          fi
