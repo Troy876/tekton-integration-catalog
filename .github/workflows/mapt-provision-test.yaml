@@ -157,7 +157,7 @@ jobs:
                   - name: cluster-access-secret
                     value: \$(tasks.mapt-provision.results.cluster-access-secret)
                   - name: oci-container
-                    value: \$(tasks.mapt-provision.results.oci-container)
+                    value: \$(tasks.mapt-provision.results.oci-ref)
                   - name: oci-credentials
                     value: \$(tasks.mapt-provision.results.oci-credentials-secret)
           ---
