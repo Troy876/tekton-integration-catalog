@@ -140,7 +140,7 @@ jobs:
           kubectl apply -f tasks/mapt-oci/kind-aws-spot/provision/0.1/kind-aws-provision.yaml
           kubectl apply -f tasks/mapt-oci/kind-aws-spot/deprovision/0.1/kind-aws-deprovision.yaml
 
-          # Inject the USER env var into the 'provisioner' step (index 1) by patching the deployed Task resource.
+          # Inject the USER env var into the 'provisioner' step by patching the deployed Task resource.
           kubectl patch task kind-aws-provision --type='json' -p='[{"op": "add", "path": "/spec/steps/1/env", "value": [{"name": "USER", "value": "tekton"}]}]'
 
           cat <<EOF | kubectl apply -f -
@@ -204,6 +204,9 @@ jobs:
           spec:
             pipelineRef:
               name: test-aws-kind-lifecycle
+            podTemplate:
+              imagePullSecrets:
+                - name: pull-secret
             params:
               - name: id
                 value: ${LOWERCASE_CLUSTER_ID}
