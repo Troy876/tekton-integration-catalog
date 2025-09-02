@@ -110,17 +110,17 @@ jobs:
 
           PROVISION_TASK_FILE="tasks/mapt-oci/kind-aws-spot/provision/0.1/kind-aws-provision.yaml"
           
-          # Patch 1: Use a public 'oc' image to avoid image pull errors in this environment
-          OLD_IMAGE="registry.redhat.io/openshift4/ose-cli:4.13@sha256:e70eb2be867f1236b19f5cbfeb8e0625737ce0ec1369e32a4f9f146aaaf68d49"
-          NEW_IMAGE="quay.io/openshift/origin-cli:latest"
-          echo "Patching Tekton task to use a public image..."
-          sed -i "s|${OLD_IMAGE}|${NEW_IMAGE}|g" "${PROVISION_TASK_FILE}"
+          # Patch 1: Use a public 'oc' image to avoid image pull errors
+          echo "Patching Tekton task to use a public 'oc' image..."
+          sed -i "s|registry.redhat.io/openshift4/ose-cli:4.13@sha256:e70eb2be867f1236b19f5cbfeb8e0625737ce0ec1369e32a4f9f146aaaf68d49|quay.io/openshift/origin-cli:latest|g" "${PROVISION_TASK_FILE}"
 
-          # Patch 2: Set the USER env var in the provisioner step to fix mapt CLI error.
-          # The 'a' (append) command in sed doesn't preserve indentation, which breaks YAML.
-          # Use 's' (substitute) to replace the line with itself plus the new, indented line.
+          # Patch 2: Set the USER env var in the provisioner step to fix mapt CLI error
           echo "Patching Tekton task to set USER environment variable..."
           sed -i 's/set -euo pipefail/set -euo pipefail\n          export USER=tekton/' "${PROVISION_TASK_FILE}"
+
+          # Patch 3: Update the mapt CLI image to a newer version to fix AWS API call bug
+          echo "Patching Tekton task to use a newer mapt image..."
+          sed -i "s|quay.io/redhat-developer/mapt:v0.9.7|quay.io/redhat-developer/mapt:v0.9.11|g" "${PROVISION_TASK_FILE}"
 
           kubectl apply -f "${PROVISION_TASK_FILE}"
           kubectl apply -f tasks/mapt-oci/kind-aws-spot/deprovision/0.1/kind-aws-deprovision.yaml
@@ -222,7 +222,7 @@ jobs:
               if [ "$STATUS" == "True" ]; then
                 echo "✅ PipelineRun Succeeded."
                 # On success, just show the last few lines of the logs.
-                kubectl logs --tail=100 -n default -l tekton.dev/pipelineRun=${PIPELINERUN_NAME} --all-containers
+                kubectl logs --tail=100 -n default -l tekton.dev/pipelineRun=${PIPELinerun_NAME} --all-containers
                 exit 0
               elif [ "$STATUS" == "False" ]; then
                 echo "::error::PipelineRun Failed. Reason: ${REASON}."
