@@ -132,6 +132,9 @@ jobs:
 
           echo "Waiting for Tekton webhook to become available..."
           kubectl wait --for=condition=Available --timeout=60s deployment/tekton-pipelines-webhook -n tekton-pipelines
+          
+          echo "Adding a short delay for webhook stabilization..."
+          sleep 15
 
           # Apply original, un-patched task files. 
           kubectl apply -f tasks/mapt-oci/kind-aws-spot/provision/0.1/kind-aws-provision.yaml
