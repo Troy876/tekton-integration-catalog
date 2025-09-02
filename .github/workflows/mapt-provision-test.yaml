@@ -48,17 +48,33 @@ jobs:
         id: cheapest_region
         run: |
           echo "🔎 Searching for the cheapest AWS region for a t4g.small (arm64) spot instance..."
+          
           REGIONS=$(aws ec2 describe-regions --query "Regions[?OptInStatus=='opt-in-not-required' || OptInStatus=='opted-in'].RegionName" --output text)
+          
           BEST_REGION=""
           MIN_PRICE="999.0"
+          
           for REGION in $REGIONS; do
-            PRICE=$(aws ec2 describe-spot-price-history --instance-types t4g.small --product-descriptions "Linux/UNIX (Amazon VPC)" --start-time $(date -u +%Y-%m-%dT%H:%M:%SZ) --max-items 1 --region "$REGION" --query "SpotPriceHistory[0].SpotPrice" --output text 2>/dev/null)
-            if [ "$PRICE" != "None" ] && [ $(echo "$PRICE < $MIN_PRICE" | bc) -eq 1 ]; then
+            PRICE=$(aws ec2 describe-spot-price-history \
+              --instance-types t4g.small \
+              --product-descriptions "Linux/UNIX (Amazon VPC)" \
+              --start-time $(date -u +%Y-%m-%dT%H:%M:%SZ) \
+              --max-items 1 \
+              --region "$REGION" \
+              --query "SpotPriceHistory[0].SpotPrice" --output text 2>/dev/null)
+              
+            # --- THIS LINE IS NOW FIXED ---
+            # Use awk for robust decimal number comparison
+            if [ -n "$PRICE" ] && awk -v price="$PRICE" -v min_price="$MIN_PRICE" 'BEGIN {exit !(price < min_price)}'; then
               MIN_PRICE=$PRICE
               BEST_REGION=$REGION
             fi
           done
-          if [ -z "$BEST_REGION" ]; then BEST_REGION="us-east-1"; fi
+          
+          if [ -z "$BEST_REGION" ]; then
+            BEST_REGION="us-east-1"
+          fi
+          
           echo "✅ Cheapest region found: $BEST_REGION at \$${MIN_PRICE}/hour"
           echo "region=${BEST_REGION}" >> $GITHUB_OUTPUT
 
