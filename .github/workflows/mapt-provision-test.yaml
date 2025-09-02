@@ -80,7 +80,12 @@ jobs:
           fi
           echo "name=${BUCKET_NAME}" >> $GITHUB_OUTPUT
 
-      - name: 5. Pre-pull and Retag Container Images
+      - name: 5. Log in to Quay.io
+        uses: docker/login-action@v3
+        with:
+          registry: quay.io
+
+      - name: 6. Pre-pull and Retag Container Images
         run: |
           echo "Pulling public images..."
           docker pull ${{ env.PUBLIC_MAPT_IMAGE }}
@@ -90,7 +95,7 @@ jobs:
           docker tag ${{ env.PUBLIC_MAPT_IMAGE }} ${{ env.ORIGINAL_MAPT_IMAGE }}
           docker tag ${{ env.PUBLIC_OC_IMAGE }} ${{ env.ORIGINAL_OC_IMAGE }}
 
-      - name: 6. Spin up KinD Cluster and Load Images
+      - name: 7. Spin up KinD Cluster and Load Images
         uses: helm/kind-action@v1.10.0
         with:
           version: v0.23.0
@@ -98,14 +103,14 @@ jobs:
             ${{ env.ORIGINAL_MAPT_IMAGE }}
             ${{ env.ORIGINAL_OC_IMAGE }}
       
-      - name: 7. Install Tekton
+      - name: 8. Install Tekton
         run: |
           kubectl apply --filename https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
           echo "⏳ Waiting for Tekton controller and webhook pods to be ready..."
           kubectl wait --for=condition=ready pod -l app=tekton-pipelines-controller -n tekton-pipelines --timeout=300s
           kubectl wait --for=condition=ready pod -l app=tekton-pipelines-webhook -n tekton-pipelines --timeout=300s
 
-      - name: 8. Show Tekton Pod Status on Failure
+      - name: 9. Show Tekton Pod Status on Failure
         if: failure()
         run: |
           echo "::error::Tekton installation failed. Dumping pod status for debugging..."
@@ -113,11 +118,11 @@ jobs:
           echo "---"
           kubectl describe pods -n tekton-pipelines
       
-      - name: 9. Create Kubernetes Secret for Tekton
+      - name: 10. Create Kubernetes Secret for Tekton
         run: |
           kubectl create secret generic aws-credentials --from-literal=access-key="${{ secrets.AWS_ACCESS_KEY_ID }}" --from-literal=secret-key="${{ secrets.AWS_SECRET_ACCESS_KEY }}" --from-literal=region="${{ steps.cheapest_region.outputs.region }}" --from-literal=bucket="${{ steps.s3_bucket.outputs.name }}"
       
-      - name: 10. Run Tekton Provision & Deprovision Pipeline
+      - name: 11. Run Tekton Provision & Deprovision Pipeline
         env:
           CLUSTER_ID: ${{ env.CLUSTER_ID }}
         run: |
@@ -130,9 +135,8 @@ jobs:
           kubectl apply -f tasks/mapt-oci/kind-aws-spot/provision/0.1/kind-aws-provision.yaml
           kubectl apply -f tasks/mapt-oci/kind-aws-spot/deprovision/0.1/kind-aws-deprovision.yaml
 
-          # Inject the USER env var by patching the deployed Task resource directly
-          # This is cleaner than patching the file on disk.
-          kubectl patch task kind-aws-provision --type='json' -p='[{"op": "add", "path": "/spec/steps/0/env", "value": [{"name": "USER", "value": "tekton"}]}]'
+          # Inject the USER env var into the 'provisioner' step (index 1) by patching the deployed Task resource.
+          kubectl patch task kind-aws-provision --type='json' -p='[{"op": "add", "path": "/spec/steps/1/env", "value": [{"name": "USER", "value": "tekton"}]}]'
 
           cat <<EOF | kubectl apply -f -
           apiVersion: tekton.dev/v1
@@ -200,7 +204,7 @@ jobs:
                 value: ${LOWERCASE_CLUSTER_ID}
           EOF
 
-      - name: 11. Monitor PipelineRun for Completion
+      - name: 12. Monitor PipelineRun for Completion
         env:
           CLUSTER_ID: ${{ env.CLUSTER_ID }}
         run: |
@@ -252,7 +256,7 @@ jobs:
           kubectl get taskruns -n default -l tekton.dev/pipelineRun=${PIPELINERUN_NAME} -o yaml
           exit 1
 
-      - name: 12. Cleanup Temporary S3 Bucket
+      - name: 13. Cleanup Temporary S3 Bucket
         if: always()
         run: |
           BUCKET_NAME="${{ steps.s3_bucket.outputs.name }}"
