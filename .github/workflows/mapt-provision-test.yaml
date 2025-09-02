@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - KFLUXDP-333
+      - main
     paths:
       - 'tasks/mapt-oci/kind-aws-spot/provision/**'
       - 'tasks/mapt-oci/kind-aws-spot/deprovision/**'
@@ -33,7 +34,7 @@ jobs:
       id-token: write
       contents: read
     env:
-      PULL_SECRET_PRESENT: ${{ secrets.PULL_SECRET_JSON != '' }}
+      PULL_SECRET_PRESENT: ${{ secrets.PULL_SECRET != '' }}
     steps:
       - name: 1. Checkout Repository
         uses: actions/checkout@v4
@@ -81,19 +82,18 @@ jobs:
         with:
           version: v0.23.0
 
-      - name: 6. Create Image Pull Secret
+      - name: 6. Create Image Pull Secret from YAML
         if: env.PULL_SECRET_PRESENT == 'true'
         run: |
-          echo "Creating image pull secret from secret value..."
-          echo '${{ secrets.PULL_SECRET_JSON }}' > /tmp/dockerconfig.json
-          kubectl create secret generic pull-secret \
-            --from-file=.dockerconfigjson=/tmp/dockerconfig.json \
-            --type=kubernetes.io/dockerconfigjson
+          echo "Applying pull secret from YAML manifest..."
+          echo '${{ secrets.PULL_SECRET }}' > /tmp/pull-secret.yaml
+          kubectl apply -f /tmp/pull-secret.yaml
 
       - name: 7. Link Pull Secret to Default Service Account
         if: env.PULL_SECRET_PRESENT == 'true'
         run: |
           echo "Patching default service account to use the pull secret..."
+          # This assumes the secret applied in the previous step is named 'pull-secret'
           kubectl patch serviceaccount default -p '{"imagePullSecrets": [{"name": "pull-secret"}]}'
       
       - name: 8. Install Tekton
@@ -212,7 +212,7 @@ jobs:
           echo "Waiting for PipelineRun '${PIPELINERUN_NAME}' to complete..."
           
           for i in {1..120}; do
-            SUCCEEDED_CONDITION=$(kubectl get pipelinerun "${PIPELINERUN_NAME}" -n default -o jsonpath='{.status.conditions[?(@.type=="Succeeded")]}' 2>/dev/null)
+            SUCCEEDED_CONDITION=$(kubectl get pipelinrun "${PIPELINERUN_NAME}" -n default -o jsonpath='{.status.conditions[?(@.type=="Succeeded")]}' 2>/dev/null)
 
             if [ -n "$SUCCEEDED_CONDITION" ]; then
               STATUS=$(echo "$SUCCEEDED_CONDITION" | jq -r '.status')
