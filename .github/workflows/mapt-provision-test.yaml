@@ -116,9 +116,11 @@ jobs:
           echo "Patching Tekton task to use a public image..."
           sed -i "s|${OLD_IMAGE}|${NEW_IMAGE}|g" "${PROVISION_TASK_FILE}"
 
-          # Patch 2: Set the USER env var in the provisioner step to fix mapt CLI error
+          # Patch 2: Set the USER env var in the provisioner step to fix mapt CLI error.
+          # The 'a' (append) command in sed doesn't preserve indentation, which breaks YAML.
+          # Use 's' (substitute) to replace the line with itself plus the new, indented line.
           echo "Patching Tekton task to set USER environment variable..."
-          sed -i "/set -euo pipefail/a export USER=tekton" "${PROVISION_TASK_FILE}"
+          sed -i 's/set -euo pipefail/set -euo pipefail\n          export USER=tekton/' "${PROVISION_TASK_FILE}"
 
           kubectl apply -f "${PROVISION_TASK_FILE}"
           kubectl apply -f tasks/mapt-oci/kind-aws-spot/deprovision/0.1/kind-aws-deprovision.yaml
