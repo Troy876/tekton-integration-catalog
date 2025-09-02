@@ -25,6 +25,12 @@ env:
   MAPT_SPOT_INCREASE_RATE: 10
   MAPT_TIMEOUT: 15m
   CLUSTER_ID: pr-${{ github.event.number }}-${{ github.run_id }}
+  # Define original image names from task files for easy reference
+  ORIGINAL_MAPT_IMAGE: quay.io/redhat-developer/mapt:v0.9.7
+  ORIGINAL_OC_IMAGE: registry.redhat.io/openshift4/ose-cli:4.13@sha256:e70eb2be867f1236b19f5cbfeb8e0625737ce0ec1369e32a4f9f146aaaf68d49
+  # Define public replacement images
+  PUBLIC_MAPT_IMAGE: quay.io/konflux-ci/mapt:latest
+  PUBLIC_OC_IMAGE: quay.io/openshift/origin-cli:latest
 
 jobs:
   test-provision-deprovision:
@@ -74,19 +80,32 @@ jobs:
           fi
           echo "name=${BUCKET_NAME}" >> $GITHUB_OUTPUT
 
-      - name: 5. Spin up KinD Cluster
+      - name: 5. Pre-pull and Retag Container Images
+        run: |
+          echo "Pulling public images..."
+          docker pull ${{ env.PUBLIC_MAPT_IMAGE }}
+          docker pull ${{ env.PUBLIC_OC_IMAGE }}
+          
+          echo "Retagging images to match original names in task definitions..."
+          docker tag ${{ env.PUBLIC_MAPT_IMAGE }} ${{ env.ORIGINAL_MAPT_IMAGE }}
+          docker tag ${{ env.PUBLIC_OC_IMAGE }} ${{ env.ORIGINAL_OC_IMAGE }}
+
+      - name: 6. Spin up KinD Cluster and Load Images
         uses: helm/kind-action@v1.10.0
         with:
           version: v0.23.0
+          load_docker_images: |
+            ${{ env.ORIGINAL_MAPT_IMAGE }}
+            ${{ env.ORIGINAL_OC_IMAGE }}
       
-      - name: 6. Install Tekton
+      - name: 7. Install Tekton
         run: |
           kubectl apply --filename https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
           echo "⏳ Waiting for Tekton controller and webhook pods to be ready..."
           kubectl wait --for=condition=ready pod -l app=tekton-pipelines-controller -n tekton-pipelines --timeout=300s
           kubectl wait --for=condition=ready pod -l app=tekton-pipelines-webhook -n tekton-pipelines --timeout=300s
 
-      - name: 7. Show Tekton Pod Status on Failure
+      - name: 8. Show Tekton Pod Status on Failure
         if: failure()
         run: |
           echo "::error::Tekton installation failed. Dumping pod status for debugging..."
@@ -94,43 +113,26 @@ jobs:
           echo "---"
           kubectl describe pods -n tekton-pipelines
       
-      - name: 8. Create Kubernetes Secret for Tekton
+      - name: 9. Create Kubernetes Secret for Tekton
         run: |
           kubectl create secret generic aws-credentials --from-literal=access-key="${{ secrets.AWS_ACCESS_KEY_ID }}" --from-literal=secret-key="${{ secrets.AWS_SECRET_ACCESS_KEY }}" --from-literal=region="${{ steps.cheapest_region.outputs.region }}" --from-literal=bucket="${{ steps.s3_bucket.outputs.name }}"
       
-      - name: 9. Run Tekton Provision & Deprovision Pipeline
+      - name: 10. Run Tekton Provision & Deprovision Pipeline
         env:
           CLUSTER_ID: ${{ env.CLUSTER_ID }}
         run: |
           LOWERCASE_CLUSTER_ID=$(echo "$CLUSTER_ID" | tr '[:upper:]' '[:lower:]')
 
           echo "Waiting for Tekton webhook to become available..."
-          sleep 10
           kubectl wait --for=condition=Available --timeout=60s deployment/tekton-pipelines-webhook -n tekton-pipelines
 
-          PROVISION_TASK_FILE="tasks/mapt-oci/kind-aws-spot/provision/0.1/kind-aws-provision.yaml"
-          DEPROVISION_TASK_FILE="tasks/mapt-oci/kind-aws-spot/deprovision/0.1/kind-aws-deprovision.yaml"
-          
-          # === Patch Provision Task ===
-          # Patch 1: Use a public 'oc' image to avoid image pull errors
-          echo "Patching Provision task to use a public 'oc' image..."
-          sed -i "s|registry.redhat.io/openshift4/ose-cli:4.13@sha256:e70eb2be867f1236b19f5cbfeb8e0625737ce0ec1369e32a4f9f146aaaf68d49|quay.io/openshift/origin-cli:latest|g" "${PROVISION_TASK_FILE}"
+          # Apply original, un-patched task files. The images are already in the cluster.
+          kubectl apply -f tasks/mapt-oci/kind-aws-spot/provision/0.1/kind-aws-provision.yaml
+          kubectl apply -f tasks/mapt-oci/kind-aws-spot/deprovision/0.1/kind-aws-deprovision.yaml
 
-          # Patch 2: Set the USER env var in the provisioner step to fix mapt CLI error
-          echo "Patching Provision task to set USER environment variable..."
-          sed -i 's/set -euo pipefail/set -euo pipefail\n          export USER=tekton/' "${PROVISION_TASK_FILE}"
-
-          # Patch 3: Update the mapt CLI image to the correct public repository 'konflux-ci'
-          echo "Patching Provision task to use the correct public mapt image..."
-          sed -i "s|quay.io/redhat-developer/mapt:v0.9.7|quay.io/konflux-ci/mapt:latest|g" "${PROVISION_TASK_FILE}"
-          
-          # === Patch Deprovision Task for consistency ===
-          echo "Patching Deprovision task to use the correct public mapt image..."
-          sed -i "s|quay.io/redhat-developer/mapt:v0.9.7|quay.io/konflux-ci/mapt:latest|g" "${DEPROVISION_TASK_FILE}"
-
-
-          kubectl apply -f "${PROVISION_TASK_FILE}"
-          kubectl apply -f "${DEPROVISION_TASK_FILE}"
+          # Inject the USER env var by patching the deployed Task resource directly
+          # This is cleaner than patching the file on disk.
+          kubectl patch task kind-aws-provision --type='json' -p='[{"op": "add", "path": "/spec/steps/0/env", "value": [{"name": "USER", "value": "tekton"}]}]'
 
           cat <<EOF | kubectl apply -f -
           apiVersion: tekton.dev/v1
@@ -165,10 +167,8 @@ jobs:
                     value: '${{ env.MAPT_SPOT_INCREASE_RATE }}'
                   - name: timeout
                     value: '${{ env.MAPT_TIMEOUT }}'
-                  # Add a valid tag to satisfy the --tags flag requirement in the mapt CLI
                   - name: tags
                     value: "created-by=github-actions"
-                  # Provide a dummy value for the oci-ref since we are not testing artifact upload
                   - name: oci-ref
                     value: "not-used"
 
@@ -183,8 +183,6 @@ jobs:
                     value: "aws-credentials"
                   - name: cluster-access-secret
                     value: \$(tasks.mapt-provision.results.cluster-access-secret)
-                  # These parameters are required by the task for validation, but are only used on failure.
-                  # We provide static values here to satisfy the validation.
                   - name: oci-container
                     value: "not-used-in-successful-run"
                   - name: oci-credentials
@@ -202,7 +200,7 @@ jobs:
                 value: ${LOWERCASE_CLUSTER_ID}
           EOF
 
-      - name: 10. Monitor PipelineRun for Completion
+      - name: 11. Monitor PipelineRun for Completion
         env:
           CLUSTER_ID: ${{ env.CLUSTER_ID }}
         run: |
@@ -216,9 +214,7 @@ jobs:
 
           echo "Waiting for PipelineRun '${PIPELINERUN_NAME}' to complete..."
           
-          # Poll for 20 minutes max (120 retries * 10 seconds)
           for i in {1..120}; do
-            # Fetch the 'Succeeded' condition of the PipelineRun, which indicates completion.
             SUCCEEDED_CONDITION=$(kubectl get pipelinerun "${PIPELINERUN_NAME}" -n default -o jsonpath='{.status.conditions[?(@.type=="Succeeded")]}' 2>/dev/null)
 
             if [ -n "$SUCCEEDED_CONDITION" ]; then
@@ -228,7 +224,6 @@ jobs:
               
               if [ "$STATUS" == "True" ]; then
                 echo "✅ PipelineRun Succeeded."
-                # On success, just show the last few lines of the logs.
                 kubectl logs --tail=100 -n default -l tekton.dev/pipelineRun=${PIPELINERUN_NAME} --all-containers
                 exit 0
               elif [ "$STATUS" == "False" ]; then
@@ -257,7 +252,7 @@ jobs:
           kubectl get taskruns -n default -l tekton.dev/pipelineRun=${PIPELINERUN_NAME} -o yaml
           exit 1
 
-      - name: 11. Cleanup Temporary S3 Bucket
+      - name: 12. Cleanup Temporary S3 Bucket
         if: always()
         run: |
           BUCKET_NAME="${{ steps.s3_bucket.outputs.name }}"
