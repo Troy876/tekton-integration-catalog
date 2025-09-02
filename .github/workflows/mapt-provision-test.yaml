@@ -84,7 +84,19 @@ jobs:
           BUCKET_NAME="mapt-test-bucket-${{ github.run_id }}-${{ github.run_attempt }}"
           REGION="${{ steps.cheapest_region.outputs.region }}"
           echo "🪣 Creating S3 bucket '$BUCKET_NAME' in region '$REGION'..."
-          aws s3api create-bucket --bucket "$BUCKET_NAME" --region "$REGION"
+          
+          # The command to create a bucket is different for us-east-1
+          if [ "$REGION" = "us-east-1" ]; then
+            aws s3api create-bucket \
+              --bucket "$BUCKET_NAME" \
+              --region "$REGION"
+          else
+            aws s3api create-bucket \
+              --bucket "$BUCKET_NAME" \
+              --region "$REGION" \
+              --create-bucket-configuration LocationConstraint="$REGION"
+          fi
+          
           echo "name=${BUCKET_NAME}" >> $GITHUB_OUTPUT
 
       - name: 5. Spin up KinD Cluster
