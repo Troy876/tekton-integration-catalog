@@ -195,7 +195,7 @@ jobs:
           # Poll for 20 minutes max (120 retries * 10 seconds)
           for i in {1..120}; do
             # Fetch the 'Succeeded' condition of the PipelineRun, which indicates completion.
-            SUCCEEDED_CONDITION=$(kubectl get pipelinerun "${PIPELINERUN_NAME}" -o jsonpath='{.status.conditions[?(@.type=="Succeeded")]}' 2>/dev/null)
+            SUCCEEDED_CONDITION=$(kubectl get pipelinerun "${PIPELINERUN_NAME}" -n default -o jsonpath='{.status.conditions[?(@.type=="Succeeded")]}' 2>/dev/null)
 
             if [ -n "$SUCCEEDED_CONDITION" ]; then
               STATUS=$(echo "$SUCCEEDED_CONDITION" | jq -r '.status')
@@ -205,13 +205,17 @@ jobs:
               if [ "$STATUS" == "True" ]; then
                 echo "✅ PipelineRun Succeeded."
                 # On success, just show the last few lines of the logs.
-                kubectl logs --tail=100 -l tekton.dev/pipelineRun=${PIPELINERUN_NAME} --all-containers
+                kubectl logs --tail=100 -n default -l tekton.dev/pipelineRun=${PIPELINERUN_NAME} --all-containers
                 exit 0
               elif [ "$STATUS" == "False" ]; then
                 echo "::error::PipelineRun Failed. Reason: ${REASON}."
                 echo "::error::Message: ${MESSAGE}"
                 echo "--- Dumping all logs for failed PipelineRun ---"
-                kubectl logs -l tekton.dev/pipelineRun=${PIPELINERUN_NAME} --all-containers --tail=-1
+                kubectl logs -n default -l tekton.dev/pipelineRun=${PIPELINERUN_NAME} --all-containers --tail=-1 || echo "Could not retrieve container logs."
+                echo "--- Dumping PipelineRun YAML ---"
+                kubectl get pipelinerun "${PIPELINERUN_NAME}" -n default -o yaml
+                echo "--- Dumping TaskRun YAMLs ---"
+                kubectl get taskruns -n default -l tekton.dev/pipelineRun=${PIPELINERUN_NAME} -o yaml
                 exit 1
               fi
             fi
@@ -222,8 +226,11 @@ jobs:
 
           echo "::error::PipelineRun timed out after 20 minutes."
           echo "--- Dumping logs and status for timed out PipelineRun ---"
-          kubectl logs -l tekton.dev/pipelineRun=${PIPELINERUN_NAME} --all-containers --tail=-1
-          kubectl get pipelinerun "${PIPELINERUN_NAME}" -o yaml
+          kubectl logs -n default -l tekton.dev/pipelineRun=${PIPELINERUN_NAME} --all-containers --tail=-1 || echo "Could not retrieve container logs."
+          echo "--- Dumping PipelineRun YAML ---"
+          kubectl get pipelinerun "${PIPELINERUN_NAME}" -n default -o yaml
+          echo "--- Dumping TaskRun YAMLs ---"
+          kubectl get taskruns -n default -l tekton.dev/pipelineRun=${PIPELINERUN_NAME} -o yaml
           exit 1
 
       - name: 11. Cleanup Temporary S3 Bucket
