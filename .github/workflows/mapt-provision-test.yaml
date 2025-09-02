@@ -98,17 +98,15 @@ jobs:
         run: |
           kubectl create secret generic aws-credentials --from-literal=access-key="${{ secrets.AWS_ACCESS_KEY_ID }}" --from-literal=secret-key="${{ secrets.AWS_SECRET_ACCESS_KEY }}" --from-literal=region="${{ steps.cheapest_region.outputs.region }}" --from-literal=bucket="${{ steps.s3_bucket.outputs.name }}"
       
-      - name: 9. Run Tekton Provision & Deprovision Pipeline
+      - name: 9. Run Tekton Provision & Deprovision Pipeline ✅
         env:
           CLUSTER_ID: ${{ env.CLUSTER_ID }}
         run: |
-          # Convert to lowercase to meet Kubernetes naming requirements (RFC 1123)
           LOWERCASE_CLUSTER_ID=$(echo "$CLUSTER_ID" | tr '[:upper:]' '[:lower:]')
 
           echo " H"
           sleep 10
           
-          # Wait for the webhook deployment to be fully available
           kubectl wait --for=condition=Available --timeout=60s deployment/tekton-pipelines-webhook -n tekton-pipelines
 
           kubectl apply -f tasks/mapt-oci/kind-aws-spot/provision/0.1/kind-aws-provision.yaml
@@ -163,14 +161,15 @@ jobs:
           apiVersion: tekton.dev/v1
           kind: PipelineRun
           metadata:
-            # Use the new lowercase variable for the name
-            name: test-\${LOWERCASE_CLUSTER_ID}
+            # Removed backslash to allow shell variable expansion
+            name: test-${LOWERCASE_CLUSTER_ID}
           spec:
             pipelineRef:
               name: test-aws-kind-lifecycle
             params:
               - name: id
-                value: \${LOWERCASE_CLUSTER_ID}
+                # Removed backslash to allow shell variable expansion
+                value: ${LOWERCASE_CLUSTER_ID}
           EOF
 
       - name: 10. Monitor PipelineRun for Completion
@@ -180,7 +179,6 @@ jobs:
           LOWERCASE_CLUSTER_ID=$(echo "$CLUSTER_ID" | tr '[:upper:]' '[:lower:]')
           PIPELINERUN_NAME="test-${LOWERCASE_CLUSTER_ID}"
           
-          # Install tkn CLI for easier log parsing
           curl -sL https://raw.githubusercontent.com/tektoncd/cli/main/scripts/installer/stable | bash >/dev/null 2>&1 && mv ./tkn /usr/local/bin/
           
           tkn pipelinerun logs "\${PIPELINERUN_NAME}" -f &
