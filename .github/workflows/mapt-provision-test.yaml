@@ -104,9 +104,8 @@ jobs:
         run: |
           LOWERCASE_CLUSTER_ID=$(echo "$CLUSTER_ID" | tr '[:upper:]' '[:lower:]')
 
-          echo " H"
+          echo "Waiting for Tekton webhook to become available..."
           sleep 10
-          
           kubectl wait --for=condition=Available --timeout=60s deployment/tekton-pipelines-webhook -n tekton-pipelines
 
           kubectl apply -f tasks/mapt-oci/kind-aws-spot/provision/0.1/kind-aws-provision.yaml
@@ -174,24 +173,42 @@ jobs:
         env:
           CLUSTER_ID: ${{ env.CLUSTER_ID }}
         run: |
+          set -e # Exit immediately if a command exits with a non-zero status.
+          
           LOWERCASE_CLUSTER_ID=$(echo "$CLUSTER_ID" | tr '[:upper:]' '[:lower:]')
           PIPELINERUN_NAME="test-${LOWERCASE_CLUSTER_ID}"
-          
-          curl -sL https://raw.githubusercontent.com/tektoncd/cli/main/scripts/installer/stable | bash >/dev/null 2>&1 && mv ./tkn /usr/local/bin/
-          
-          tkn pipelinerun logs "\${PIPELINERUN_NAME}" -f &
-          LOGS_PID=\$!
-          
-          for i in {1..120}; do
-            STATUS=\$(kubectl get pipelinerun "\${PIPELINERUN_NAME}" -o jsonpath='{.status.conditions[0].status}' 2>/dev/null)
-            REASON=\$(kubectl get pipelinerun "\${PIPELINERUN_NAME}" -o jsonpath='{.status.conditions[0].reason}' 2>/dev/null)
-            if [ "\$STATUS" == "True" ]; then echo "✅ PipelineRun Succeeded."; kill \$LOGS_PID; exit 0; fi
-            if [ "\$STATUS" == "False" ]; then echo "::error::PipelineRun Failed with reason: \$REASON."; kill \$LOGS_PID; exit 1; fi
-            sleep 10
-          done
-          echo "::error::PipelineRun timed out after 20 minutes."
-          kill \$LOGS_PID
-          exit 1
+
+          echo "Installing Tekton CLI (tkn)..."
+          # Download and run the installer script. We let its output show to diagnose any issues.
+          curl -sL https://raw.githubusercontent.com/tektoncd/cli/main/scripts/installer/stable | bash
+          # The script downloads 'tkn' to the current directory. Move it to a globally accessible location.
+          sudo mv ./tkn /usr/local/bin/
+          echo "Verifying tkn installation..."
+          tkn version
+
+          echo "Streaming logs for PipelineRun '${PIPELINERUN_NAME}'..."
+          # Use the 'timeout' command to wait for a maximum of 20 minutes (1200s).
+          # 'tkn logs -f' will stream logs and exit when the PipelineRun completes.
+          # We add '|| true' so the script doesn't exit if 'timeout' kills the process.
+          timeout 1200s tkn pipelinerun logs "${PIPELINERUN_NAME}" -f || true
+
+          echo "Checking final status of PipelineRun '${PIPELINERUN_NAME}'..."
+          # Use 'tkn describe' with jsonpath to get the final status.
+          STATUS=$(tkn pipelinerun describe "${PIPELINERUN_NAME}" -o jsonpath='{.status.conditions[0].status}')
+          REASON=$(tkn pipelinerun describe "${PIPELINERUN_NAME}" -o jsonpath='{.status.conditions[0].reason}')
+
+          if [ "$STATUS" == "True" ]; then
+            echo "✅ PipelineRun Succeeded."
+            exit 0
+          elif [ "$STATUS" == "False" ]; then
+            echo "::error::PipelineRun Failed with reason: ${REASON}."
+            exit 1
+          else
+            echo "::error::PipelineRun timed out or ended in an unknown state (Status: ${STATUS})."
+            # It's helpful to dump the full status for debugging timeouts
+            tkn pipelinerun describe "${PIPELINERUN_NAME}"
+            exit 1
+          fi
 
       - name: 11. Cleanup Temporary S3 Bucket
         if: always()
