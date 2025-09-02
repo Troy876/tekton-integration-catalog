@@ -32,6 +32,8 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    env:
+      PULL_SECRET_PRESENT: ${{ secrets.PULL_SECRET_JSON != '' }}
     steps:
       - name: 1. Checkout Repository
         uses: actions/checkout@v4
@@ -80,7 +82,7 @@ jobs:
           version: v0.23.0
 
       - name: 6. Create Image Pull Secret
-        if: secrets.PULL_SECRET_JSON
+        if: env.PULL_SECRET_PRESENT == 'true'
         run: |
           echo "Creating image pull secret..."
           kubectl create secret generic pull-secret \
@@ -88,7 +90,7 @@ jobs:
             --type=kubernetes.io/dockerconfigjson
 
       - name: 7. Link Pull Secret to Default Service Account
-        if: secrets.PULL_SECRET_JSON
+        if: env.PULL_SECRET_PRESENT == 'true'
         run: |
           echo "Patching default service account to use the pull secret..."
           kubectl patch serviceaccount default -p '{"imagePullSecrets": [{"name": "pull-secret"}]}'
@@ -255,4 +257,3 @@ jobs:
             aws s3 rb "s3://${BUCKET_NAME}" --force
             echo "✅ Cleanup complete."
           fi
-
