@@ -151,6 +151,9 @@ jobs:
                     value: '${{ env.MAPT_SPOT_INCREASE_RATE }}'
                   - name: timeout
                     value: '${{ env.MAPT_TIMEOUT }}'
+                  # Add a valid tag to satisfy the --tags flag requirement in the mapt CLI
+                  - name: tags
+                    value: "created-by=github-actions"
                   # Provide a dummy value for the oci-ref since we are not testing artifact upload
                   - name: oci-ref
                     value: "not-used"
