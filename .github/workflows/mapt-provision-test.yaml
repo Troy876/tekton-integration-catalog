@@ -144,6 +144,9 @@ jobs:
                     value: '${{ env.MAPT_SPOT_INCREASE_RATE }}'
                   - name: timeout
                     value: '${{ env.MAPT_TIMEOUT }}'
+                  # Provide a dummy value for the oci-ref since we are not testing artifact upload
+                  - name: oci-ref
+                    value: "not-used"
 
               - name: mapt-deprovision
                 runAfter: ["mapt-provision"]
@@ -156,10 +159,12 @@ jobs:
                     value: "aws-credentials"
                   - name: cluster-access-secret
                     value: \$(tasks.mapt-provision.results.cluster-access-secret)
+                  # These parameters are required by the task for validation, but are only used on failure.
+                  # We provide static values here to satisfy the validation.
                   - name: oci-container
-                    value: \$(tasks.mapt-provision.results.oci-ref)
+                    value: "not-used-in-successful-run"
                   - name: oci-credentials
-                    value: \$(tasks.mapt-provision.results.oci-credentials-secret)
+                    value: "konflux-test-infra"
           ---
           apiVersion: tekton.dev/v1
           kind: PipelineRun
