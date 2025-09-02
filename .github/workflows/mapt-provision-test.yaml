@@ -108,7 +108,14 @@ jobs:
           sleep 10
           kubectl wait --for=condition=Available --timeout=60s deployment/tekton-pipelines-webhook -n tekton-pipelines
 
-          kubectl apply -f tasks/mapt-oci/kind-aws-spot/provision/0.1/kind-aws-provision.yaml
+          # Patch the provision task to use a public 'oc' image to avoid image pull errors in this environment
+          PROVISION_TASK_FILE="tasks/mapt-oci/kind-aws-spot/provision/0.1/kind-aws-provision.yaml"
+          OLD_IMAGE="registry.redhat.io/openshift4/ose-cli:4.13@sha256:e70eb2be867f1236b19f5cbfeb8e0625737ce0ec1369e32a4f9f146aaaf68d49"
+          NEW_IMAGE="quay.io/openshift/origin-cli:latest"
+          echo "Patching Tekton task to use a public image..."
+          sed -i "s|${OLD_IMAGE}|${NEW_IMAGE}|g" "${PROVISION_TASK_FILE}"
+
+          kubectl apply -f "${PROVISION_TASK_FILE}"
           kubectl apply -f tasks/mapt-oci/kind-aws-spot/deprovision/0.1/kind-aws-deprovision.yaml
 
           cat <<EOF | kubectl apply -f -
