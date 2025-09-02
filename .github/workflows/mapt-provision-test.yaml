@@ -20,7 +20,7 @@ on:
 env:
   MAPT_ARCH: x86_64
   MAPT_CPUS: 1
-  MAPT_MEMORY: 2
+  MAPT_MEMORY: 1
   MAPT_SPOT: "true"
   MAPT_SPOT_INCREASE_RATE: 10
   MAPT_TIMEOUT: 15m
@@ -108,7 +108,7 @@ jobs:
           sleep 10
           kubectl wait --for=condition=Available --timeout=60s deployment/tekton-pipelines-webhook -n tekton-pipelines
 
-          PROVISION_TASK_FILE="tasks/mapt-oci/kind-aws-spot/provision/0.2/kind-aws-provision.yaml"
+          PROVISION_TASK_FILE="tasks/mapt-oci/kind-aws-spot/provision/0.1/kind-aws-provision.yaml"
           DEPROVISION_TASK_FILE="tasks/mapt-oci/kind-aws-spot/deprovision/0.1/kind-aws-deprovision.yaml"
           
           # === Patch Provision Task ===
