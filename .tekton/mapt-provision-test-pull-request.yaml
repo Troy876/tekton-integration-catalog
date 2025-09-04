@@ -7,15 +7,14 @@ metadata:
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
-    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch
-      == "main" && ( "tasks/mapt-oci/kind-aws-spot/***".pathChanged()
-      || ".tekton/mapt-provision-test.yaml".pathChanged() )
+    pipelinesascode.tekton.dev/on-cel-expression: event == "pull_request" && ( "tasks/mapt-oci/kind-aws-spot/***".pathChanged()
+      || ".tekton/mapt-provision-test-pull-request.yaml".pathChanged() )
   creationTimestamp: null
   labels:
     appstudio.openshift.io/application: mapt-provision-test
     appstudio.openshift.io/component: mapt-provision-test
     pipelines.appstudio.openshift.io/type: test
-  name: mapt-provision-test-on-push
+  name: mapt-provision-test-on-pull-request
   namespace: rh-konflux-devprod-tenant
 spec:
   params:
@@ -45,6 +44,8 @@ spec:
     description: |
       This pipeline tests the mapt provision and deprovision tasks by creating a temporary Kind cluster on AWS
       and then cleaning it up. It validates the complete lifecycle of cluster provisioning using the Mapt CLI.
+      
+      This version is triggered on pull requests to validate changes to the mapt tasks.
       
       The pipeline:
       - Provisions a Kind cluster on AWS using spot instances
@@ -119,7 +120,7 @@ spec:
       - name: timeout
         value: $(params.mapt-timeout)
       - name: tags
-        value: "created-by=tekton-pipeline,test-run=$(context.pipelineRun.name)"
+        value: "created-by=tekton-pipeline,test-run=$(context.pipelineRun.name),pr=$(context.pipelineRun.labels['pipelinesascode.tekton.dev/pull-request'])"
       - name: oci-ref
         value: "not-used"
       taskRef:
