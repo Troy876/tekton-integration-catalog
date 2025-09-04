@@ -6,7 +6,7 @@ Welcome to the **Tekton Integration Catalog**! This repository contains a collec
 
 With prebuilt Tekton Tasks and StepActions, this catalog provides reusable components that help integrate and validate application components. By leveraging these resources, teams can streamline their testing processes and focus on delivering high-quality software.
 
-## 📁 Structure
+## 📁 Structure   
 
 This repository is organized into several key directories, each serving a specific purpose for Tekton-related resources.
 
@@ -25,7 +25,7 @@ The **StepActions** directory houses modular building blocks that allow you to f
 - Reuse logic across multiple tasks.
 For further details on StepActions, refer to the [Tekton documentation](https://tekton.dev/docs/pipelines/stepactions/).
 
-### 🧩 Pipelines
+### 🧩 Pipelines   
 
 The **Pipelines** directory includes complete Tekton Pipelines composed of Tasks and StepActions. These Pipelines provide end-to-end examples of how to combine reusable components into robust CI/CD workflows. If you're looking to orchestrate multiple tasks into a cohesive flow, Pipelines are a great starting point.
 
@@ -65,3 +65,5 @@ Each version should be **clearly labeled** to avoid breaking existing pipelines.
 ## 🤝 Contributing
 
 We welcome contributions! If you’d like to **add a new task**, **improve existing ones**, or **enhance documentation**, check out our [Contributing Guide](./CONTRIBUTING.md).
+
+Do not merge
