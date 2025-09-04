@@ -8,7 +8,7 @@ metadata:
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
     pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch
-      == "KFLUXDP-333" && ( "tasks/mapt-oci/kind-aws-spot/***".pathChanged()
+      == "main" && ( "tasks/mapt-oci/kind-aws-spot/***".pathChanged()
       || ".tekton/mapt-provision-test-push.yaml".pathChanged() )
   creationTimestamp: null
   labels:
